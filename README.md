@@ -161,7 +161,7 @@ projectContextPrompt: "src/prompts/project-context.md"
 
 ### 可用工具
 
-本 MCP Server 提供 8 个工具，涵盖测试生成和代码审查的完整流程。
+本 MCP Server 提供 11 个工具，涵盖测试生成和代码审查的完整流程。
 
 #### 1. detect-project-test-stack
 
@@ -424,6 +424,70 @@ projectContextPrompt: "src/prompts/project-context.md"
 - 将 `generate-tests` 生成的测试代码落盘
 - 批量创建多个测试文件
 - 控制是否覆盖已有文件（默认不覆盖，避免误删）
+
+---
+
+#### 9. fetch-commit-changes
+
+**功能：** 从本地 Git 仓库获取指定 commit 的变更内容。
+
+**参数：**
+```typescript
+{
+  commitHash: string   // Git commit hash（支持短 hash）
+  repoPath?: string    // 仓库路径（默认当前工作目录）
+}
+```
+
+**使用场景：**
+- 代码合并后根据 commit 生成功能清单和测试矩阵
+- 在没有 Phabricator 的环境下获取 diff
+
+---
+
+#### 10. analyze-commit-test-matrix
+
+**功能：** 分析 commit 的功能清单和测试矩阵。
+
+**参数：**
+```typescript
+{
+  commitHash: string      // Git commit hash
+  repoPath?: string       // 仓库路径
+  projectRoot?: string    // 项目根目录
+}
+```
+
+**使用场景：**
+- 代码合并后自动生成测试矩阵
+- CI/CD 流程中根据 commit 分析测试需求
+
+---
+
+#### 11. run-tests
+
+**功能：** 在项目中执行测试命令。
+
+**参数：**
+```typescript
+{
+  projectRoot?: string    // 项目根目录
+  command?: string        // 命令（默认 npm）
+  args?: string[]         // 参数（默认 ["test", "--", "--runInBand"]）
+  timeoutMs?: number      // 超时时间（默认 600000）
+}
+```
+
+**使用场景：**
+- 生成测试后自动执行验证
+- CI/CD 流程中执行测试套件
+- 验证代码质量门控
+
+---
+
+## 完整工作流示例
+
+查看 [WORKFLOW_EXAMPLES.md](./WORKFLOW_EXAMPLES.md) 了解完整的使用示例。
 
 ## 架构
 

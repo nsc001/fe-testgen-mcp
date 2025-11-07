@@ -4,6 +4,9 @@
 
 ### Added
 - **write-test-file 工具**: 将生成的测试用例写入磁盘文件，支持批量写入和覆盖控制
+- **fetch-commit-changes 工具**: 从本地 Git 仓库获取指定 commit 的变更内容
+- **analyze-commit-test-matrix 工具**: 基于 commit 分析功能清单和测试矩阵
+- **run-tests 工具**: 在项目中执行测试命令（支持自定义命令和超时控制）
 - **架构设计文档**: `ARCHITECTURE_REDESIGN.md` 规划了 SSE/HTTP Stream 传输和 ReAct 模式智能体架构
 - **实施总结文档**: `IMPLEMENTATION_SUMMARY.md` 记录了所有改进细节和测试建议
 
@@ -38,6 +41,5 @@
 
 ### 下一步
 1. 更新剩余 CR agents (css, typescript, performance, security, i18n)
-2. 实现 fetch-commit-changes 工具
-3. 实现 run-tests 工具
-4. 支持 HTTP/SSE transport
+2. 支持 HTTP/SSE transport
+3. 与 CI 集成自动执行测试流程

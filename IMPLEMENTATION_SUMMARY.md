@@ -78,6 +78,42 @@
 3. **智能体层**: ReAct 模式（Thought → Action → Observation）
 4. **支持 commit-based 分析**: 既支持 diff，也支持 commit
 
+### Phase 4: Commit-based 工具实现 ✅
+
+#### 4.1 fetch-commit-changes 工具
+- **文件**: `src/tools/fetch-commit-changes.ts`
+- **功能**: 从本地 Git 仓库获取 commit 变更
+- **特性**:
+  - 支持短 hash 和完整 hash
+  - 返回 commit 信息（作者、日期、消息）
+  - 自动应用 NEW_LINE_xxx 行号格式
+  - 支持获取 commit range（多个 commit）
+
+#### 4.2 analyze-commit-test-matrix 工具
+- **文件**: `src/tools/analyze-commit-test-matrix.ts`
+- **功能**: 基于 commit 分析功能清单和测试矩阵
+- **特性**:
+  - 与 analyze-test-matrix 相同的分析能力
+  - 支持从 commit 而非 diff 获取代码
+  - 自动过滤前端文件
+  - 检测测试框架和项目根目录
+
+#### 4.3 run-tests 工具
+- **文件**: `src/tools/run-tests.ts`
+- **功能**: 执行项目测试命令
+- **特性**:
+  - 支持自定义命令和参数
+  - 超时控制（默认 10 分钟）
+  - 实时捕获 stdout 和 stderr
+  - 返回执行结果和持续时间
+
+#### 4.4 工作流文档
+- **文件**: `WORKFLOW_EXAMPLES.md`
+- **内容**:
+  - 5 个完整的工作流示例
+  - 最佳实践和常见问题
+  - CI/CD 集成示例
+
 ## 问题根源分析
 
 ### 行号错乱的根本原因
@@ -125,20 +161,19 @@
 
 ## 下一步计划
 
-### 短期 (本次任务后续)
+### 短期
 1. 更新剩余的 CR agents（css, typescript, performance, security, i18n）
 2. 添加单元测试验证行号正确性
-3. 完善 write-test-file 工具的错误处理
+3. 扩展 run-tests 支持常见测试框架（Vitest/Jest 的快速模式）
 
-### 中期 (Phase 3)
-1. 实现 fetch-commit-changes 工具
-2. 实现 run-tests 工具
-3. 重构 TestAgent 使用 ReAct 模式
-4. 支持从 commit 分析测试矩阵
+### 中期
+1. 重构 TestAgent 使用 ReAct 模式（自动化工具编排）
+2. 在 analyze-test-matrix / analyze-commit-test-matrix 中引入缓存策略
+3. 增强 write-test-file 工具（支持代码格式化）
 
-### 长期 (Phase 4)
+### 长期
 1. 实现 HTTP Server 模式
-2. 实现 SSE transport
+2. 实现 SSE transport（流式输出）
 3. 实现 Webhook handler
 4. 支持自动化 CI/CD 集成
 
