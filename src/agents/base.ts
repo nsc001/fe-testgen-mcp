@@ -19,6 +19,8 @@ export abstract class BaseAgent<T> {
   protected openai: OpenAIClient;
   protected config: BaseAgentConfig;
   protected prompt: string;
+  protected basePrompt: string;
+  private currentProjectContext?: string;
 
   constructor(openai: OpenAIClient, config: BaseAgentConfig) {
     this.openai = openai;
@@ -26,18 +28,46 @@ export abstract class BaseAgent<T> {
     
     // 如果 promptPath 为空，说明该 Agent 不使用外部 prompt 文件
     if (config.promptPath) {
-      const basePrompt = this.loadPrompt(config.promptPath);
-      
-      // 如果有项目特定规则，附加到 prompt
-      if (config.projectContextPrompt) {
-        this.prompt = `${basePrompt}\n\n## 项目特定规则\n\n${config.projectContextPrompt}`;
-      } else {
-        this.prompt = basePrompt;
-      }
+      this.basePrompt = this.loadPrompt(config.promptPath);
+      this.currentProjectContext = config.projectContextPrompt;
+      this.prompt = this.buildFullPrompt(this.basePrompt, this.currentProjectContext);
     } else {
       // 不使用外部 prompt，设置为空字符串
+      this.basePrompt = '';
       this.prompt = '';
+      this.currentProjectContext = undefined;
     }
+  }
+
+  /**
+   * 构建完整的 prompt（基础 prompt + 项目特定规则）
+   */
+  private buildFullPrompt(base: string, projectContext?: string): string {
+    if (projectContext) {
+      if (base) {
+        return `${base}\n\n## 项目特定规则\n\n${projectContext}`;
+      }
+      return projectContext;
+    }
+    return base;
+  }
+
+  /**
+   * 动态更新项目上下文 prompt
+   * 这允许在运行时更新 agent 的配置，而无需重新创建 agent 实例
+   */
+  updateProjectContext(projectContextPrompt?: string): void {
+    if (this.currentProjectContext === projectContextPrompt) {
+      return; // 没有变化，跳过更新
+    }
+    
+    this.currentProjectContext = projectContextPrompt;
+    this.prompt = this.buildFullPrompt(this.basePrompt, projectContextPrompt);
+    
+    logger.debug(`Updated project context for agent ${this.config.name}`, {
+      hasContext: !!projectContextPrompt,
+      contextLength: projectContextPrompt?.length || 0,
+    });
   }
 
   /**

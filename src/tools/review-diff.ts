@@ -27,12 +27,12 @@ import { readFileSync } from 'fs';
 
 export class ReviewDiffTool {
   private workflow: Workflow;
-  private testingSuggestionsAgent!: TestingSuggestionsAgent;
+  private testingSuggestionsAgent: TestingSuggestionsAgent;
   private openai: OpenAIClient;
   private mergePrompt: string;
   private manualProjectRoot?: string;
   private globalContextPrompt?: string;
-  private currentAgentPrompt?: string;
+  private currentProjectContext?: string;
   private crAgents: Map<string, BaseAgent<any>>;
   private topicIdentifier: TopicIdentifierAgent;
   private orchestrator: Orchestrator;
@@ -79,9 +79,9 @@ export class ReviewDiffTool {
     
     // 仓库级别的 prompt 会在 review() 时动态加载，这里先记录全局配置
     this.globalContextPrompt = globalContextPrompt;
+    this.currentProjectContext = globalContextPrompt;
 
     // 初始化工作流相关对象
-    this.crAgents = new Map<string, BaseAgent<any>>();
     this.topicIdentifier = new TopicIdentifierAgent(openai);
     this.orchestrator = new Orchestrator(
       {
@@ -92,9 +92,17 @@ export class ReviewDiffTool {
       embedding
     );
 
-    // 根据当前可用的 prompt 初始化 CR agents
-    this.currentAgentPrompt = this.globalContextPrompt;
-    this.updateCrAgents(this.currentAgentPrompt);
+    // 初始化 CR agents（使用全局配置作为默认值）
+    this.crAgents = new Map<string, BaseAgent<any>>();
+    this.crAgents.set('react', new ReactAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('typescript', new TypeScriptAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('performance', new PerformanceAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('accessibility', new AccessibilityAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('security', new SecurityAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('css', new CSSAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('i18n', new I18nAgent(this.openai, globalContextPrompt));
+    this.testingSuggestionsAgent = new TestingSuggestionsAgent(this.openai, globalContextPrompt);
+    this.crAgents.set('testing-suggestions', this.testingSuggestionsAgent);
 
     this.workflow = new Workflow(
       this.topicIdentifier,
@@ -102,27 +110,30 @@ export class ReviewDiffTool {
       this.crAgents,
       new Map()
     );
+
+    logger.info('Initialized CR agents', {
+      hasGlobalPrompt: !!globalContextPrompt,
+      promptLength: globalContextPrompt?.length || 0,
+    });
   }
 
   /**
-   * 更新所有 CR agents 的 prompt 配置
+   * 更新所有 CR agents 的项目上下文 prompt
    */
-  private updateCrAgents(projectContextPrompt: string | undefined): void {
-    this.crAgents.clear();
-    this.crAgents.set('react', new ReactAgent(this.openai, projectContextPrompt));
-    this.crAgents.set('typescript', new TypeScriptAgent(this.openai, projectContextPrompt));
-    this.crAgents.set('performance', new PerformanceAgent(this.openai, projectContextPrompt));
-    this.crAgents.set('accessibility', new AccessibilityAgent(this.openai, projectContextPrompt));
-    this.crAgents.set('security', new SecurityAgent(this.openai, projectContextPrompt));
-    this.crAgents.set('css', new CSSAgent(this.openai, projectContextPrompt));
-    this.crAgents.set('i18n', new I18nAgent(this.openai, projectContextPrompt));
-    const testingSuggestionsAgent = new TestingSuggestionsAgent(this.openai, projectContextPrompt);
-    this.crAgents.set('testing-suggestions', testingSuggestionsAgent);
-    this.testingSuggestionsAgent = testingSuggestionsAgent;
-    this.currentAgentPrompt = projectContextPrompt;
-    logger.info('Initialized CR agents with project context', {
-      hasProjectPrompt: !!projectContextPrompt,
-      promptLength: projectContextPrompt?.length || 0,
+  private updateAllAgentsContext(projectContextPrompt?: string): void {
+    if (this.currentProjectContext === projectContextPrompt) {
+      return; // 没有变化，跳过更新
+    }
+
+    for (const agent of this.crAgents.values()) {
+      agent.updateProjectContext(projectContextPrompt);
+    }
+    
+    this.currentProjectContext = projectContextPrompt;
+    
+    logger.info('Updated all agents with new project context', {
+      hasContext: !!projectContextPrompt,
+      contextLength: projectContextPrompt?.length || 0,
     });
   }
 
@@ -200,13 +211,12 @@ export class ReviewDiffTool {
       undefined
     );
     
-    // 如果 prompt 配置发生变化，需要重新初始化 agents
-    if (mergedProjectContextPrompt !== this.currentAgentPrompt) {
+    if (mergedProjectContextPrompt !== this.currentProjectContext) {
       logger.info('Prompt config changed, updating agents', {
-        previousLength: this.currentAgentPrompt?.length || 0,
+        previousLength: this.currentProjectContext?.length || 0,
         newLength: mergedProjectContextPrompt?.length || 0,
       });
-      this.updateCrAgents(mergedProjectContextPrompt);
+      this.updateAllAgentsContext(mergedProjectContextPrompt);
     }
 
     const state = await this.stateManager.initState(

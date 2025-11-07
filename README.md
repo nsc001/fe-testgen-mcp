@@ -111,6 +111,39 @@ cache:
 projectContextPrompt: "src/prompts/project-context.md"
 ```
 
+### 4. 仓库级 Prompt 配置（推荐）
+
+`review-frontend-diff` 和 `generate-tests` 会在运行时自动合并项目特定的 Prompt。系统会按以下顺序查找项目根目录中的配置文件（命中第一个非空文件即停止）：
+
+1. `.cursorrules`
+2. `.ai/rules.md` 或 `.ai/prompt.md`
+3. `.mcp/prompt.md` 或 `.mcp/rules.md`
+4. `.llmrules`
+5. `.codingconvention.md` 或 `CODING_CONVENTIONS.md`
+
+Prompt 合并优先级为 **工具参数 `projectRoot` 指定路径 > 仓库级配置 > 全局 `config.yaml` 配置**。这意味着可以通过工具调用显式切换项目根目录，或在配置文件中提供默认规则作为后备。
+
+**快速上手**：
+
+```bash
+# 在项目根目录创建 Cursor 规则文件（推荐）
+touch .cursorrules
+
+cat >> .cursorrules <<'EOF'
+# 项目编码规范
+- React 组件必须使用函数式组件
+- 所有新文件需要 TypeScript 类型定义
+- CSS 使用 Tailwind 或 CSS Modules，禁止内联样式
+EOF
+```
+
+执行审查或测试生成时，日志中会输出类似 `Using repo-level prompt config` 的信息，用于确认配置是否生效。若自动识别失败，可：
+
+- 在工具输入中显式传入 `projectRoot`
+- 或预先设置环境变量 `PROJECT_ROOT`
+
+**提示**：当仓库级 Prompt 更新后，可通过 `forceRefresh: true` 参数强制重新加载。
+
 ## 使用
 
 ### 作为 MCP Server

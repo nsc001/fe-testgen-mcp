@@ -27,7 +27,7 @@ export class GenerateTestsTool {
   private openai: OpenAIClient;
   private manualProjectRoot?: string;
   private globalContextPrompt?: string;
-  private currentAgentPrompt?: string;
+  private currentProjectContext?: string;
   private testAgents: Map<string, BaseAgent<any>>;
   private topicIdentifier: TopicIdentifierAgent;
   private orchestrator: Orchestrator;
@@ -60,7 +60,7 @@ export class GenerateTestsTool {
       }
     }
     this.globalContextPrompt = globalContextPrompt;
-    this.currentAgentPrompt = this.globalContextPrompt;
+    this.currentProjectContext = this.globalContextPrompt;
     
     this.topicIdentifier = new TopicIdentifierAgent(openai);
     this.orchestrator = new Orchestrator(
@@ -73,7 +73,10 @@ export class GenerateTestsTool {
     );
     
     this.testAgents = new Map();
-    this.updateTestAgents(this.currentAgentPrompt);
+    this.testAgents.set('happy-path', new HappyPathTestAgent(this.openai, globalContextPrompt));
+    this.testAgents.set('edge-case', new EdgeCaseTestAgent(this.openai, globalContextPrompt));
+    this.testAgents.set('error-path', new ErrorPathTestAgent(this.openai, globalContextPrompt));
+    this.testAgents.set('state-change', new StateChangeTestAgent(this.openai, globalContextPrompt));
 
     this.workflow = new Workflow(
       this.topicIdentifier,
@@ -81,21 +84,30 @@ export class GenerateTestsTool {
       new Map(),
       this.testAgents
     );
+
+    logger.info('Initialized test agents', {
+      hasGlobalPrompt: !!globalContextPrompt,
+      promptLength: globalContextPrompt?.length || 0,
+    });
   }
 
   /**
-   * 更新所有 Test agents 的 prompt 配置
+   * 更新所有 Test agents 的项目上下文 prompt
    */
-  private updateTestAgents(projectContextPrompt: string | undefined): void {
-    this.testAgents.clear();
-    this.testAgents.set('happy-path', new HappyPathTestAgent(this.openai, projectContextPrompt));
-    this.testAgents.set('edge-case', new EdgeCaseTestAgent(this.openai, projectContextPrompt));
-    this.testAgents.set('error-path', new ErrorPathTestAgent(this.openai, projectContextPrompt));
-    this.testAgents.set('state-change', new StateChangeTestAgent(this.openai, projectContextPrompt));
-    this.currentAgentPrompt = projectContextPrompt;
-    logger.info('Initialized test agents with project context', {
-      hasProjectPrompt: !!projectContextPrompt,
-      promptLength: projectContextPrompt?.length || 0,
+  private updateTestAgentsContext(projectContextPrompt?: string): void {
+    if (this.currentProjectContext === projectContextPrompt) {
+      return;
+    }
+
+    for (const agent of this.testAgents.values()) {
+      agent.updateProjectContext(projectContextPrompt);
+    }
+
+    this.currentProjectContext = projectContextPrompt;
+    
+    logger.info('Updated test agents with new project context', {
+      hasContext: !!projectContextPrompt,
+      contextLength: projectContextPrompt?.length || 0,
     });
   }
 
@@ -143,12 +155,12 @@ export class GenerateTestsTool {
       undefined
     );
 
-    if (mergedProjectContextPrompt !== this.currentAgentPrompt) {
+    if (mergedProjectContextPrompt !== this.currentProjectContext) {
       logger.info('Prompt config changed for test generation', {
-        previousLength: this.currentAgentPrompt?.length || 0,
+        previousLength: this.currentProjectContext?.length || 0,
         newLength: mergedProjectContextPrompt?.length || 0,
       });
-      this.updateTestAgents(mergedProjectContextPrompt);
+      this.updateTestAgentsContext(mergedProjectContextPrompt);
     }
 
     const testDetectionPath = getTestStackDetectionPath(
