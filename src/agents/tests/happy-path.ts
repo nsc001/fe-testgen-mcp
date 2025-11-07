@@ -7,11 +7,12 @@ import { TestScenario } from '../../schemas/topic.js';
 import { logger } from '../../utils/logger.js';
 
 export class HappyPathTestAgent extends BaseAgent<TestCase> {
-  constructor(openai: OpenAIClient) {
+  constructor(openai: OpenAIClient, projectContextPrompt?: string) {
     super(openai, {
       name: 'happy-path',
       promptPath: getProjectPath('src/prompts/tests/happy-path.md'),
       description: '生成正常路径的单元测试用例',
+      projectContextPrompt,
     });
   }
 

@@ -7,11 +7,12 @@ import { TestScenario } from '../../schemas/topic.js';
 import { logger } from '../../utils/logger.js';
 
 export class ErrorPathTestAgent extends BaseAgent<TestCase> {
-  constructor(openai: OpenAIClient) {
+  constructor(openai: OpenAIClient, projectContextPrompt?: string) {
     super(openai, {
       name: 'error-path',
       promptPath: getProjectPath('src/prompts/tests/error-path.md'),
       description: '生成异常路径测试用例',
+      projectContextPrompt,
     });
   }
 
