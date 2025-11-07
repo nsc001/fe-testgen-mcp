@@ -9,7 +9,8 @@ export type IssueSeverity = z.infer<typeof IssueSeverity>;
 export const Issue = z.object({
   id: z.string(), // 稳定指纹
   file: z.string(),
-  line: z.number(),
+  line: z.number().optional(), // 可选，如果提供 codeSnippet 则可以不提供
+  codeSnippet: z.string().optional(), // 问题代码片段，用于自动定位行号
   severity: IssueSeverity,
   topic: CRTopic,
   message: z.string(),

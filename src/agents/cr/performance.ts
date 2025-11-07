@@ -47,7 +47,7 @@ export class PerformanceAgent extends BaseAgent<Issue> {
     
     return `分析以下代码变更，识别性能相关问题：
 
-${this.getLineNumberInstructions()}
+${this.getCodeSnippetInstructions()}
 
 **变更的文件列表**：
 - ${this.buildFilePathsList(files)}
@@ -62,7 +62,7 @@ ${fileList}
 
 返回 JSON 格式的问题列表，每个问题包含：
 - file: 文件路径（必须从上面的文件列表中选择，保持完全一致）
-- line: **新文件的行号**（必须是 diff 中 + 号后面显示的行号，不要使用 - 号的旧行号）
+- codeSnippet: **问题代码片段**（从 diff 中复制有问题的代码，不要包含 NEW_LINE_xxx 前缀）- 号的旧行号）
 - severity: critical/high/medium/low
 - message: 问题描述
 - suggestion: 修复建议
@@ -103,12 +103,13 @@ ${fileList}
         const issue: Issue = {
           id: generateIssueFingerprint(
             filePath,
-            [item.line || 0, item.line || 0],
+            (item.codeSnippet || item.code_snippet) || [item.line || 0, item.line || 0],
             'performance',
             item.message || ''
           ),
           file: filePath,
-          line: item.line || 0,
+          line: item.line,
+          codeSnippet: item.codeSnippet || item.code_snippet,
           severity: item.severity || 'medium',
           topic: CRTopic.parse('performance'),
           message: item.message || '',

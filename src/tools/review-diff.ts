@@ -19,7 +19,12 @@ import type { Config } from '../config/schema.js';
 import type { ReviewDiffInput } from '../schemas/tool-io.js';
 import type { ReviewResult } from '../schemas/issue.js';
 import { logger } from '../utils/logger.js';
-import { findNewLineNumber, validateAndCorrectLineNumber, generateLineValidationDebugInfo } from '../utils/diff-parser.js';
+import {
+  findNewLineNumber,
+  validateAndCorrectLineNumber,
+  generateLineValidationDebugInfo,
+  findLineNumberByCodeSnippet,
+} from '../utils/diff-parser.js';
 import { getProjectPath } from '../utils/paths.js';
 import { loadRepoPrompt, mergePromptConfigs } from '../utils/repo-prompt.js';
 import { detectProjectRoot } from '../utils/project-root.js';
@@ -233,6 +238,7 @@ export class ReviewDiffTool {
       id: i.id,
       file: i.file,
       line: i.line,
+      codeSnippet: i.codeSnippet,
       severity: i.severity as any,
       topic: i.category as any,
       message: i.message,
@@ -283,44 +289,97 @@ export class ReviewDiffTool {
               return null;
             }
             
-            // 验证并尽量修正行号
-            const validation = validateAndCorrectLineNumber(file, issue.line);
-            if (!validation.valid) {
-              logger.warn('Issue line not directly reviewable', {
-                file: issue.file,
-                line: issue.line,
-                message: issue.message,
-                reason: validation.reason,
-                suggestion: validation.suggestion,
-              });
-              
-              if (validation.suggestion) {
-                logger.info('Adjusting issue line to suggested reviewable line', {
-                  originalLine: issue.line,
-                  suggestedLine: validation.suggestion,
-                  file: issue.file,
-                });
-                issue = {
-                  ...issue,
-                  line: validation.suggestion,
-                  id: `${issue.id}:line-adjusted-${validation.suggestion}`,
-                };
+            let resolvedLine: number | null = null;
+            let resolvedSource: 'snippet' | 'line' | 'line-adjusted' | null = null;
+            let updatedIssue = issue;
+            
+            // 1. 优先使用代码片段匹配
+            if (issue.codeSnippet) {
+              const snippetLine = findLineNumberByCodeSnippet(file, issue.codeSnippet);
+              if (snippetLine !== null) {
+                resolvedLine = snippetLine;
+                resolvedSource = 'snippet';
               } else {
-                return null;
+                logger.warn('Failed to locate line by codeSnippet', {
+                  file: issue.file,
+                  codeSnippet: issue.codeSnippet,
+                  message: issue.message,
+                });
               }
             }
             
-            // 再使用 findNewLineNumber 进行二次验证
-            const newLine = findNewLineNumber(file, issue.line);
-            if (newLine === null) {
-              logger.error('Line validation failed: findNewLineNumber returned null for reviewable line', {
+            // 2. 回退到行号验证
+            if (resolvedLine === null && typeof issue.line === 'number') {
+              const validation = validateAndCorrectLineNumber(file, issue.line);
+              if (!validation.valid) {
+                logger.warn('Issue line not directly reviewable (fallback to line)', {
+                  file: issue.file,
+                  line: issue.line,
+                  message: issue.message,
+                  reason: validation.reason,
+                  suggestion: validation.suggestion,
+                });
+                
+                if (validation.suggestion) {
+                  logger.info('Adjusting issue line to suggested reviewable line', {
+                    originalLine: issue.line,
+                    suggestedLine: validation.suggestion,
+                    file: issue.file,
+                  });
+                  resolvedLine = validation.suggestion;
+                  resolvedSource = 'line-adjusted';
+                  updatedIssue = {
+                    ...issue,
+                    line: validation.suggestion,
+                    id: `${issue.id}:line-adjusted-${validation.suggestion}`,
+                  };
+                } else {
+                  return null;
+                }
+              } else {
+                resolvedLine = validation.line ?? issue.line;
+                resolvedSource = 'line';
+              }
+            }
+            
+            if (resolvedLine === null) {
+              logger.warn('Unable to determine line number for issue, skipping', {
                 file: issue.file,
+                message: issue.message,
+                codeSnippet: issue.codeSnippet,
                 line: issue.line,
+              });
+              return null;
+            }
+            
+            // 3. 最终验证
+            const newLine = findNewLineNumber(file, resolvedLine);
+            if (newLine === null) {
+              logger.error('Line validation failed: findNewLineNumber returned null for resolved line', {
+                file: issue.file,
+                resolvedLine,
+                source: resolvedSource,
                 message: issue.message,
                 debug: generateLineValidationDebugInfo(file),
               });
               return null;
             }
+            
+            if (resolvedSource !== 'line-adjusted' && newLine !== resolvedLine) {
+              logger.info('Adjusted line after final validation', {
+                file: issue.file,
+                resolvedLine,
+                newLine,
+                source: resolvedSource,
+              });
+              resolvedLine = newLine;
+            }
+            
+            // 更新 issue 对象中的行号，便于后续状态保存
+            updatedIssue = {
+              ...updatedIssue,
+              line: newLine,
+            };
             
             const parts: string[] = [];
             const severityLabel = issue.severity.toUpperCase();
@@ -338,7 +397,7 @@ export class ReviewDiffTool {
               file: issue.file,
               line: newLine,
               message,
-              issueId: issue.id,
+              issueId: updatedIssue.id,
               confidence: issue.confidence,
             };
           })

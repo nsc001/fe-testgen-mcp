@@ -437,6 +437,139 @@ export function generateLineValidationDebugInfo(file: DiffFile): string {
 }
 
 /**
+ * 代码片段匹配选项
+ */
+export interface CodeSnippetMatchOptions {
+  fuzzyMatch?: boolean;        // 是否允许模糊匹配（忽略空格差异）
+  maxDistance?: number;        // 最大编辑距离（用于模糊匹配）
+  preferAddedLines?: boolean;  // 是否优先匹配新增行
+}
+
+/**
+ * 在 diff 文件中查找代码片段对应的行号
+ * 
+ * @param file - DiffFile 对象
+ * @param codeSnippet - 要查找的代码片段（可以是完整行或部分代码）
+ * @param options - 匹配选项
+ * @returns 匹配到的行号，如果找不到返回 null
+ */
+export function findLineNumberByCodeSnippet(
+  file: DiffFile,
+  codeSnippet: string,
+  options: CodeSnippetMatchOptions = {}
+): number | null {
+  const {
+    fuzzyMatch = true,
+    preferAddedLines = true,
+  } = options;
+  
+  // 规范化代码片段（移除首尾空格，统一换行符）
+  const normalizedSnippet = codeSnippet.trim().replace(/\r\n/g, '\n');
+  
+  // 如果代码片段为空，返回 null
+  if (!normalizedSnippet) {
+    return null;
+  }
+  
+  // 收集所有可评论行及其内容
+  const reviewableLines = getReviewableLineDetails(file);
+  
+  // 用于存储匹配结果
+  const matches: Array<{ line: number; type: 'added' | 'context'; score: number }> = [];
+  
+  for (const detail of reviewableLines) {
+    // 提取行内容（去除 +/- 前缀和首尾空格）
+    const lineContent = detail.content;
+    const rawLineContent = detail.raw.replace(/^[+\-\s]/, '').trim();
+    
+    // 精确匹配
+    if (lineContent.includes(normalizedSnippet) || rawLineContent.includes(normalizedSnippet)) {
+      matches.push({
+        line: detail.line,
+        type: detail.type,
+        score: 100, // 精确匹配得分最高
+      });
+      continue;
+    }
+    
+    // 模糊匹配（移除所有空格后比较）
+    if (fuzzyMatch) {
+      const normalizedLineContent = lineContent.replace(/\s+/g, '');
+      const normalizedSnippetNoSpace = normalizedSnippet.replace(/\s+/g, '');
+      
+      if (normalizedLineContent.includes(normalizedSnippetNoSpace)) {
+        matches.push({
+          line: detail.line,
+          type: detail.type,
+          score: 80, // 模糊匹配得分较低
+        });
+        continue;
+      }
+      
+      // 部分匹配（代码片段包含行内容或行内容包含代码片段的主要部分）
+      const snippetWords = normalizedSnippet.split(/\s+/).filter(w => w.length > 2);
+      const lineWords = lineContent.split(/\s+/).filter(w => w.length > 2);
+      
+      if (snippetWords.length > 0 && lineWords.length > 0) {
+        const matchingWords = snippetWords.filter(word => 
+          lineWords.some(lineWord => lineWord.includes(word) || word.includes(lineWord))
+        );
+        
+        const matchRatio = matchingWords.length / snippetWords.length;
+        
+        if (matchRatio >= 0.6) { // 至少 60% 的关键词匹配
+          matches.push({
+            line: detail.line,
+            type: detail.type,
+            score: Math.floor(matchRatio * 60), // 部分匹配得分更低
+          });
+        }
+      }
+    }
+  }
+  
+  // 如果没有匹配，返回 null
+  if (matches.length === 0) {
+    return null;
+  }
+  
+  // 按优先级排序：得分 > 类型（新增优先） > 行号（较小的优先）
+  matches.sort((a, b) => {
+    // 1. 得分高的优先
+    if (a.score !== b.score) {
+      return b.score - a.score;
+    }
+    
+    // 2. 如果优先新增行，新增行优先
+    if (preferAddedLines) {
+      if (a.type === 'added' && b.type !== 'added') return -1;
+      if (a.type !== 'added' && b.type === 'added') return 1;
+    }
+    
+    // 3. 行号较小的优先（通常问题出现在第一次出现的位置）
+    return a.line - b.line;
+  });
+  
+  return matches[0].line;
+}
+
+/**
+ * 批量查找代码片段对应的行号
+ * 
+ * @param file - DiffFile 对象
+ * @param codeSnippets - 代码片段数组
+ * @param options - 匹配选项
+ * @returns 行号数组，与输入顺序对应，找不到的为 null
+ */
+export function findLineNumbersByCodeSnippets(
+  file: DiffFile,
+  codeSnippets: string[],
+  options: CodeSnippetMatchOptions = {}
+): Array<number | null> {
+  return codeSnippets.map(snippet => findLineNumberByCodeSnippet(file, snippet, options));
+}
+
+/**
  * 从完整 diff 中提取单个文件的 diff 片段
  */
 export function extractFileDiff(rawDiff: string, filePath: string): string {
