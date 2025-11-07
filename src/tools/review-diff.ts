@@ -19,7 +19,7 @@ import type { Config } from '../config/schema.js';
 import type { ReviewDiffInput } from '../schemas/tool-io.js';
 import type { ReviewResult } from '../schemas/issue.js';
 import { logger } from '../utils/logger.js';
-import { findNewLineNumber, getReviewableLines } from '../utils/diff-parser.js';
+import { findNewLineNumber, validateAndCorrectLineNumber, generateLineValidationDebugInfo } from '../utils/diff-parser.js';
 import { getProjectPath } from '../utils/paths.js';
 import { loadRepoPrompt, mergePromptConfigs } from '../utils/repo-prompt.js';
 import { detectProjectRoot } from '../utils/project-root.js';
@@ -270,12 +270,6 @@ export class ReviewDiffTool {
       try {
         const fileMap = new Map(frontendDiff.files.map(f => [f.path, f]));
         
-        // 构建可评论行的映射（用于验证和调试）
-        const reviewableLinesMap = new Map<string, Set<number>>();
-        for (const file of frontendDiff.files) {
-          reviewableLinesMap.set(file.path, getReviewableLines(file));
-        }
-        
         const publishableIssues = allIssues
           .filter(issue => issue.confidence >= 0.8)
           .map(issue => {
@@ -289,16 +283,31 @@ export class ReviewDiffTool {
               return null;
             }
             
-            // 首先检查行号是否在可评论行集合中
-            const reviewableLines = reviewableLinesMap.get(issue.file);
-            if (!reviewableLines || !reviewableLines.has(issue.line)) {
-              logger.warn('Issue line is not reviewable (not an added or context line)', {
+            // 验证并尽量修正行号
+            const validation = validateAndCorrectLineNumber(file, issue.line);
+            if (!validation.valid) {
+              logger.warn('Issue line not directly reviewable', {
                 file: issue.file,
                 line: issue.line,
                 message: issue.message,
-                reviewableLines: reviewableLines ? Array.from(reviewableLines).sort((a, b) => a - b) : [],
+                reason: validation.reason,
+                suggestion: validation.suggestion,
               });
-              return null;
+              
+              if (validation.suggestion) {
+                logger.info('Adjusting issue line to suggested reviewable line', {
+                  originalLine: issue.line,
+                  suggestedLine: validation.suggestion,
+                  file: issue.file,
+                });
+                issue = {
+                  ...issue,
+                  line: validation.suggestion,
+                  id: `${issue.id}:line-adjusted-${validation.suggestion}`,
+                };
+              } else {
+                return null;
+              }
             }
             
             // 再使用 findNewLineNumber 进行二次验证
@@ -308,6 +317,7 @@ export class ReviewDiffTool {
                 file: issue.file,
                 line: issue.line,
                 message: issue.message,
+                debug: generateLineValidationDebugInfo(file),
               });
               return null;
             }

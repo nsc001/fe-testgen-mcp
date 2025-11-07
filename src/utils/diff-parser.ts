@@ -350,6 +350,93 @@ export function getReviewableLines(file: DiffFile): Set<number> {
 }
 
 /**
+ * 验证并修正行号
+ * 如果行号无效，尝试在附近找到最接近的可评论行号
+ * @returns { valid: boolean, line: number | null, reason?: string }
+ */
+export function validateAndCorrectLineNumber(
+  file: DiffFile,
+  targetLine: number,
+  maxSearchDistance: number = 3
+): { valid: boolean; line: number | null; reason?: string; suggestion?: number } {
+  const reviewableLines = getReviewableLines(file);
+  
+  // 如果行号直接有效，返回
+  if (reviewableLines.has(targetLine)) {
+    return { valid: true, line: targetLine };
+  }
+  
+  // 行号无效，尝试查找原因
+  let reason = 'Line number not in any hunk';
+  
+  // 检查是否在某个 hunk 的范围内
+  for (const hunk of file.hunks) {
+    const newEnd = hunk.newStart + hunk.newLines - 1;
+    if (targetLine >= hunk.newStart && targetLine <= newEnd) {
+      // 在 hunk 范围内但不可评论，说明是删除的行
+      reason = 'Line is in a deleted section (not reviewable)';
+      
+      // 尝试在附近找到可评论的行
+      for (let distance = 1; distance <= maxSearchDistance; distance++) {
+        // 先向后找（优先找新增行）
+        const nextLine = targetLine + distance;
+        if (reviewableLines.has(nextLine) && nextLine <= newEnd) {
+          return {
+            valid: false,
+            line: null,
+            reason,
+            suggestion: nextLine,
+          };
+        }
+        
+        // 再向前找
+        const prevLine = targetLine - distance;
+        if (reviewableLines.has(prevLine) && prevLine >= hunk.newStart) {
+          return {
+            valid: false,
+            line: null,
+            reason,
+            suggestion: prevLine,
+          };
+        }
+      }
+      
+      break;
+    }
+  }
+  
+  return { valid: false, line: null, reason };
+}
+
+/**
+ * 生成行号验证的调试信息
+ */
+export function generateLineValidationDebugInfo(file: DiffFile): string {
+  const details = getReviewableLineDetails(file);
+  let info = `File: ${file.path}\n`;
+  info += `Change type: ${file.changeType}\n`;
+  info += `Hunks: ${file.hunks.length}\n\n`;
+  
+  for (let i = 0; i < file.hunks.length; i++) {
+    const hunk = file.hunks[i];
+    info += `Hunk ${i + 1}: @@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n`;
+    info += `  New line range: ${hunk.newStart} - ${hunk.newStart + hunk.newLines - 1}\n`;
+    
+    const hunkDetails = details.filter(
+      d => d.line >= hunk.newStart && d.line < hunk.newStart + hunk.newLines
+    );
+    
+    info += `  Reviewable lines (${hunkDetails.length}):\n`;
+    for (const detail of hunkDetails) {
+      info += `    - Line ${detail.line} (${detail.type}): ${detail.content.substring(0, 60)}\n`;
+    }
+    info += '\n';
+  }
+  
+  return info;
+}
+
+/**
  * 从完整 diff 中提取单个文件的 diff 片段
  */
 export function extractFileDiff(rawDiff: string, filePath: string): string {
