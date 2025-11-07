@@ -190,8 +190,11 @@ export class ReviewDiffTool {
         isMonorepo: projectRoot.isMonorepo,
       });
       
-      // 加载仓库级别的 prompt 配置
-      const repoPromptConfig = loadRepoPrompt(projectRoot.root);
+      // 加载仓库级别的 prompt 配置（支持 monorepo 子项目）
+      const repoPromptConfig = loadRepoPrompt(
+        projectRoot.root,
+        frontendDiff.files.map(f => f.path)
+      );
       if (repoPromptConfig.found) {
         logger.info('Using repo-level prompt config for code review', {
           source: repoPromptConfig.source,

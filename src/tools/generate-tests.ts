@@ -135,7 +135,10 @@ export class GenerateTestsTool {
 
     let repoProjectContextPrompt: string | undefined;
     try {
-      const repoPromptConfig = loadRepoPrompt(projectRoot.root);
+      const repoPromptConfig = loadRepoPrompt(
+        projectRoot.root,
+        frontendDiff.files.map(f => f.path)
+      );
       if (repoPromptConfig.found) {
         repoProjectContextPrompt = repoPromptConfig.content;
         logger.info('Using repo-level prompt config for test generation', {
