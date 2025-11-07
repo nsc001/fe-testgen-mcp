@@ -2,6 +2,7 @@ import { FetchDiffTool } from './fetch-diff.js';
 import { PublishCommentsTool } from './publish-comments.js';
 import { StateManager } from '../state/manager.js';
 import { TopicIdentifierAgent } from '../agents/topic-identifier.js';
+import { BaseAgent } from '../agents/base.js';
 import { Workflow } from '../orchestrator/workflow.js';
 import { ReactAgent } from '../agents/cr/react.js';
 import { TypeScriptAgent } from '../agents/cr/typescript.js';
@@ -20,6 +21,8 @@ import type { ReviewResult } from '../schemas/issue.js';
 import { logger } from '../utils/logger.js';
 import { findNewLineNumber } from '../utils/diff-parser.js';
 import { getProjectPath } from '../utils/paths.js';
+import { loadRepoPrompt, mergePromptConfigs } from '../utils/repo-prompt.js';
+import { detectProjectRoot } from '../utils/project-root.js';
 import { readFileSync } from 'fs';
 
 export class ReviewDiffTool {
@@ -27,6 +30,12 @@ export class ReviewDiffTool {
   private testingSuggestionsAgent: TestingSuggestionsAgent;
   private openai: OpenAIClient;
   private mergePrompt: string;
+  private manualProjectRoot?: string;
+  private globalContextPrompt?: string;
+  private currentProjectContext?: string;
+  private crAgents: Map<string, BaseAgent<any>>;
+  private topicIdentifier: TopicIdentifierAgent;
+  private orchestrator: Orchestrator;
 
   constructor(
     private fetchDiffTool: FetchDiffTool,
@@ -37,6 +46,8 @@ export class ReviewDiffTool {
     config: Config
   ) {
     this.openai = openai;
+    this.manualProjectRoot = config.projectRoot || process.env.PROJECT_ROOT;
+    
     try {
       this.mergePrompt = readFileSync(
         getProjectPath('src/prompts/comment-merger.md'),
@@ -47,29 +58,32 @@ export class ReviewDiffTool {
       this.mergePrompt = 'Merge multiple code review comments into one unified comment.';
     }
 
-    let projectContextPrompt: string | undefined;
+    // 从配置文件加载全局 prompt（优先级最低）
+    let globalContextPrompt: string | undefined;
     if (config.projectContextPrompt) {
       try {
-        projectContextPrompt = readFileSync(
+        globalContextPrompt = readFileSync(
           getProjectPath(config.projectContextPrompt),
           'utf-8'
         );
+        logger.info('Loaded global project context prompt from config', { 
+          path: config.projectContextPrompt 
+        });
       } catch (error) {
-        logger.warn('Failed to load project context prompt', { error, path: config.projectContextPrompt });
+        logger.warn('Failed to load global project context prompt', { 
+          error, 
+          path: config.projectContextPrompt 
+        });
       }
     }
+    
+    // 仓库级别的 prompt 会在 review() 时动态加载，这里先记录全局配置
+    this.globalContextPrompt = globalContextPrompt;
+    this.currentProjectContext = globalContextPrompt;
 
-    const crAgents = new Map();
-    crAgents.set('react', new ReactAgent(openai, projectContextPrompt));
-    crAgents.set('typescript', new TypeScriptAgent(openai, projectContextPrompt));
-    crAgents.set('performance', new PerformanceAgent(openai, projectContextPrompt));
-    crAgents.set('accessibility', new AccessibilityAgent(openai, projectContextPrompt));
-    crAgents.set('security', new SecurityAgent(openai, projectContextPrompt));
-    crAgents.set('css', new CSSAgent(openai, projectContextPrompt));
-    crAgents.set('i18n', new I18nAgent(openai, projectContextPrompt));
-    crAgents.set('testing-suggestions', new TestingSuggestionsAgent(openai, projectContextPrompt));
-
-    const orchestrator = new Orchestrator(
+    // 初始化工作流相关对象
+    this.topicIdentifier = new TopicIdentifierAgent(openai);
+    this.orchestrator = new Orchestrator(
       {
         parallelAgents: config.orchestrator.parallelAgents,
         maxConcurrency: config.orchestrator.maxConcurrency,
@@ -78,15 +92,49 @@ export class ReviewDiffTool {
       embedding
     );
 
-    const topicIdentifier = new TopicIdentifierAgent(openai);
+    // 初始化 CR agents（使用全局配置作为默认值）
+    this.crAgents = new Map<string, BaseAgent<any>>();
+    this.crAgents.set('react', new ReactAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('typescript', new TypeScriptAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('performance', new PerformanceAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('accessibility', new AccessibilityAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('security', new SecurityAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('css', new CSSAgent(this.openai, globalContextPrompt));
+    this.crAgents.set('i18n', new I18nAgent(this.openai, globalContextPrompt));
+    this.testingSuggestionsAgent = new TestingSuggestionsAgent(this.openai, globalContextPrompt);
+    this.crAgents.set('testing-suggestions', this.testingSuggestionsAgent);
+
     this.workflow = new Workflow(
-      topicIdentifier,
-      orchestrator,
-      crAgents,
+      this.topicIdentifier,
+      this.orchestrator,
+      this.crAgents,
       new Map()
     );
 
-    this.testingSuggestionsAgent = new TestingSuggestionsAgent(openai, projectContextPrompt);
+    logger.info('Initialized CR agents', {
+      hasGlobalPrompt: !!globalContextPrompt,
+      promptLength: globalContextPrompt?.length || 0,
+    });
+  }
+
+  /**
+   * 更新所有 CR agents 的项目上下文 prompt
+   */
+  private updateAllAgentsContext(projectContextPrompt?: string): void {
+    if (this.currentProjectContext === projectContextPrompt) {
+      return; // 没有变化，跳过更新
+    }
+
+    for (const agent of this.crAgents.values()) {
+      agent.updateProjectContext(projectContextPrompt);
+    }
+    
+    this.currentProjectContext = projectContextPrompt;
+    
+    logger.info('Updated all agents with new project context', {
+      hasContext: !!projectContextPrompt,
+      contextLength: projectContextPrompt?.length || 0,
+    });
   }
 
   private async mergeComments(messages: string[]): Promise<string> {
@@ -128,6 +176,51 @@ export class ReviewDiffTool {
 
     const frontendDiff = this.fetchDiffTool.filterFrontendFiles(diff);
     const diffFingerprint = this.fetchDiffTool.computeDiffFingerprint(frontendDiff);
+    
+    // 动态检测项目根目录并加载仓库级别的 prompt 配置
+    let repoProjectContextPrompt: string | undefined;
+    
+    try {
+      const filePaths = frontendDiff.files.map(f => f.path);
+      const effectiveProjectRoot = input.projectRoot || this.manualProjectRoot;
+      const projectRoot = detectProjectRoot(filePaths, effectiveProjectRoot);
+      
+      logger.info('Project root detected for code review', {
+        root: projectRoot.root,
+        isMonorepo: projectRoot.isMonorepo,
+      });
+      
+      // 加载仓库级别的 prompt 配置（支持 monorepo 子项目）
+      const repoPromptConfig = loadRepoPrompt(
+        projectRoot.root,
+        frontendDiff.files.map(f => f.path)
+      );
+      if (repoPromptConfig.found) {
+        logger.info('Using repo-level prompt config for code review', {
+          source: repoPromptConfig.source,
+          length: repoPromptConfig.content.length,
+        });
+        repoProjectContextPrompt = repoPromptConfig.content;
+      } else {
+        logger.debug('No repo-level prompt found, using global config if available');
+      }
+    } catch (error) {
+      logger.warn('Failed to detect project root or load repo prompt', { error });
+    }
+    
+    const mergedProjectContextPrompt = mergePromptConfigs(
+      this.globalContextPrompt,
+      repoProjectContextPrompt,
+      undefined
+    );
+    
+    if (mergedProjectContextPrompt !== this.currentProjectContext) {
+      logger.info('Prompt config changed, updating agents', {
+        previousLength: this.currentProjectContext?.length || 0,
+        newLength: mergedProjectContextPrompt?.length || 0,
+      });
+      this.updateAllAgentsContext(mergedProjectContextPrompt);
+    }
 
     const state = await this.stateManager.initState(
       input.revisionId,

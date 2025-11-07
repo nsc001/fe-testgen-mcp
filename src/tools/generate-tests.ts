@@ -10,18 +10,27 @@ import { StateChangeTestAgent } from '../agents/tests/state-change.js';
 import { OpenAIClient } from '../clients/openai.js';
 import { EmbeddingClient } from '../clients/embedding.js';
 import { Orchestrator } from '../orchestrator/pipeline.js';
+import { BaseAgent } from '../agents/base.js';
 import type { Config } from '../config/schema.js';
 import type { GenerateTestsInput } from '../schemas/tool-io.js';
 import type { TestGenerationResult } from '../schemas/test-plan.js';
 import { logger } from '../utils/logger.js';
 import { detectProjectRoot, getTestStackDetectionPath } from '../utils/project-root.js';
+import { loadRepoPrompt, mergePromptConfigs } from '../utils/repo-prompt.js';
+import { getProjectPath } from '../utils/paths.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { glob } from 'glob';
 
 export class GenerateTestsTool {
   private workflow: Workflow;
+  private openai: OpenAIClient;
   private manualProjectRoot?: string;
+  private globalContextPrompt?: string;
+  private currentProjectContext?: string;
+  private testAgents: Map<string, BaseAgent<any>>;
+  private topicIdentifier: TopicIdentifierAgent;
+  private orchestrator: Orchestrator;
 
   constructor(
     private fetchDiffTool: FetchDiffTool,
@@ -30,14 +39,31 @@ export class GenerateTestsTool {
     embedding: EmbeddingClient,
     config: Config
   ) {
+    this.openai = openai;
     this.manualProjectRoot = config.projectRoot || process.env.PROJECT_ROOT;
-    const testAgents = new Map();
-    testAgents.set('happy-path', new HappyPathTestAgent(openai));
-    testAgents.set('edge-case', new EdgeCaseTestAgent(openai));
-    testAgents.set('error-path', new ErrorPathTestAgent(openai));
-    testAgents.set('state-change', new StateChangeTestAgent(openai));
-
-    const orchestrator = new Orchestrator(
+    
+    let globalContextPrompt: string | undefined;
+    if (config.projectContextPrompt) {
+      try {
+        globalContextPrompt = readFileSync(
+          getProjectPath(config.projectContextPrompt),
+          'utf-8'
+        );
+        logger.info('Loaded global project context prompt for test generation', {
+          path: config.projectContextPrompt,
+        });
+      } catch (error) {
+        logger.warn('Failed to load global project context prompt for test generation', {
+          error,
+          path: config.projectContextPrompt,
+        });
+      }
+    }
+    this.globalContextPrompt = globalContextPrompt;
+    this.currentProjectContext = this.globalContextPrompt;
+    
+    this.topicIdentifier = new TopicIdentifierAgent(openai);
+    this.orchestrator = new Orchestrator(
       {
         parallelAgents: config.orchestrator.parallelAgents,
         maxConcurrency: config.orchestrator.maxConcurrency,
@@ -45,14 +71,44 @@ export class GenerateTestsTool {
       },
       embedding
     );
+    
+    this.testAgents = new Map();
+    this.testAgents.set('happy-path', new HappyPathTestAgent(this.openai, globalContextPrompt));
+    this.testAgents.set('edge-case', new EdgeCaseTestAgent(this.openai, globalContextPrompt));
+    this.testAgents.set('error-path', new ErrorPathTestAgent(this.openai, globalContextPrompt));
+    this.testAgents.set('state-change', new StateChangeTestAgent(this.openai, globalContextPrompt));
 
-    const topicIdentifier = new TopicIdentifierAgent(openai);
     this.workflow = new Workflow(
-      topicIdentifier,
-      orchestrator,
+      this.topicIdentifier,
+      this.orchestrator,
       new Map(),
-      testAgents
+      this.testAgents
     );
+
+    logger.info('Initialized test agents', {
+      hasGlobalPrompt: !!globalContextPrompt,
+      promptLength: globalContextPrompt?.length || 0,
+    });
+  }
+
+  /**
+   * 更新所有 Test agents 的项目上下文 prompt
+   */
+  private updateTestAgentsContext(projectContextPrompt?: string): void {
+    if (this.currentProjectContext === projectContextPrompt) {
+      return;
+    }
+
+    for (const agent of this.testAgents.values()) {
+      agent.updateProjectContext(projectContextPrompt);
+    }
+
+    this.currentProjectContext = projectContextPrompt;
+    
+    logger.info('Updated test agents with new project context', {
+      hasContext: !!projectContextPrompt,
+      contextLength: projectContextPrompt?.length || 0,
+    });
   }
 
   async generate(input: GenerateTestsInput): Promise<TestGenerationResult> {
@@ -76,6 +132,39 @@ export class GenerateTestsTool {
       isMonorepo: projectRoot.isMonorepo,
       workspaceType: projectRoot.workspaceType,
     });
+
+    let repoProjectContextPrompt: string | undefined;
+    try {
+      const repoPromptConfig = loadRepoPrompt(
+        projectRoot.root,
+        frontendDiff.files.map(f => f.path)
+      );
+      if (repoPromptConfig.found) {
+        repoProjectContextPrompt = repoPromptConfig.content;
+        logger.info('Using repo-level prompt config for test generation', {
+          source: repoPromptConfig.source,
+          length: repoPromptConfig.content.length,
+        });
+      } else {
+        logger.debug('No repo-level prompt found for test generation, using global config if available');
+      }
+    } catch (error) {
+      logger.warn('Failed to load repo prompt config for test generation', { error });
+    }
+
+    const mergedProjectContextPrompt = mergePromptConfigs(
+      this.globalContextPrompt,
+      repoProjectContextPrompt,
+      undefined
+    );
+
+    if (mergedProjectContextPrompt !== this.currentProjectContext) {
+      logger.info('Prompt config changed for test generation', {
+        previousLength: this.currentProjectContext?.length || 0,
+        newLength: mergedProjectContextPrompt?.length || 0,
+      });
+      this.updateTestAgentsContext(mergedProjectContextPrompt);
+    }
 
     const testDetectionPath = getTestStackDetectionPath(
       projectRoot,

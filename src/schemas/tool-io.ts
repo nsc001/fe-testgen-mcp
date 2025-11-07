@@ -16,6 +16,7 @@ export type DetectStackOutput = z.infer<typeof DetectStackOutput>;
 // review-frontend-diff
 export const ReviewDiffInput = z.object({
   revisionId: z.string(),
+  projectRoot: z.string().optional(), // 项目根目录（用于检测仓库级 prompt 配置）
   topics: z.array(z.string()).optional(), // 手动指定主题（可选）
   mode: z.enum(['incremental', 'full']).optional().default('incremental'),
   confidenceMin: z.number().optional(),

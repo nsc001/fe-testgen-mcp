@@ -7,11 +7,12 @@ import { TestScenario } from '../../schemas/topic.js';
 import { logger } from '../../utils/logger.js';
 
 export class EdgeCaseTestAgent extends BaseAgent<TestCase> {
-  constructor(openai: OpenAIClient) {
+  constructor(openai: OpenAIClient, projectContextPrompt?: string) {
     super(openai, {
       name: 'edge-case',
       promptPath: getProjectPath('src/prompts/tests/edge-case.md'),
       description: '生成边界值测试用例',
+      projectContextPrompt,
     });
   }
 

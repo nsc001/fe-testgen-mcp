@@ -111,6 +111,86 @@ cache:
 projectContextPrompt: "src/prompts/project-context.md"
 ```
 
+### 4. 仓库级 Prompt 配置（推荐）
+
+`review-frontend-diff` 和 `generate-tests` 会在运行时自动合并项目特定的 Prompt。系统会按以下优先级顺序查找配置文件（命中第一个非空文件即停止）：
+
+1. `fe-mcp` / `fe-mcp.md` / `fe-mcp.mdc` （**FE MCP 专用配置，推荐**）
+2. `.cursorrules` （Cursor AI 编辑器规则）
+3. `.ai/rules.md` 或 `.ai/prompt.md`
+4. `.mcp/prompt.md` 或 `.mcp/rules.md`
+5. `.llmrules`
+6. `.codingconvention.md` 或 `CODING_CONVENTIONS.md`
+
+Prompt 合并优先级为 **工具参数 `projectRoot` 指定路径 > 仓库级配置 > 全局 `config.yaml` 配置**。这意味着可以通过工具调用显式切换项目根目录，或在配置文件中提供默认规则作为后备。
+
+#### Monorepo 支持
+
+对于 monorepo 项目，系统会智能查找配置：
+
+1. **子项目配置优先**：如果变更的文件位于子项目（如 `packages/foo`），会先在子项目根目录查找配置
+2. **回退到根配置**：如果子项目没有配置，使用 monorepo 根目录的配置
+3. **共享配置**：可以在根目录放置通用规则，在子项目放置特定规则
+
+示例结构：
+
+```
+monorepo-root/
+├── fe-mcp.md           # 全局规则（所有子项目共享）
+├── packages/
+│   ├── ui-components/
+│   │   └── fe-mcp.md   # UI 组件库专用规则（优先级更高）
+│   └── business-logic/
+│       └── fe-mcp.md   # 业务逻辑专用规则
+└── apps/
+    └── web/
+        └── fe-mcp.md   # Web 应用专用规则
+```
+
+**快速上手**：
+
+```bash
+# 在项目根目录创建 FE MCP 专用配置文件（推荐）
+touch fe-mcp.md
+
+cat >> fe-mcp.md <<'EOF'
+# 前端编码规范
+
+## React 组件
+- 必须使用函数式组件 + Hooks
+- 所有组件需要 TypeScript 类型定义
+- Props 使用 interface 定义，不使用 type
+
+## 样式规范
+- 使用 Tailwind CSS
+- 禁止内联样式
+- 组件样式文件使用 .module.css 后缀
+
+## 状态管理
+- 使用 Zustand 进行全局状态管理
+- 本地状态优先使用 useState
+- 复杂状态逻辑使用 useReducer
+EOF
+
+# 对于 Monorepo，可以在子项目中创建特定规则
+mkdir -p packages/ui-components
+cat >> packages/ui-components/fe-mcp.md <<'EOF'
+# UI 组件库规范
+
+继承根目录规则，额外要求：
+- 所有组件必须导出 Props 类型
+- 必须提供 Storybook 示例
+- 必须有单元测试覆盖
+EOF
+```
+
+执行审查或测试生成时，日志中会输出 `Using package-level prompt config` 或 `Using repo-level prompt config` 信息，用于确认配置来源。若自动识别失败，可：
+
+- 在工具输入中显式传入 `projectRoot`
+- 或预先设置环境变量 `PROJECT_ROOT`
+
+**提示**：当仓库级 Prompt 更新后，可通过 `forceRefresh: true` 参数强制重新加载。
+
 ## 使用
 
 ### 作为 MCP Server

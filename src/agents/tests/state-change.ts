@@ -7,11 +7,12 @@ import { TestScenario } from '../../schemas/topic.js';
 import { logger } from '../../utils/logger.js';
 
 export class StateChangeTestAgent extends BaseAgent<TestCase> {
-  constructor(openai: OpenAIClient) {
+  constructor(openai: OpenAIClient, projectContextPrompt?: string) {
     super(openai, {
       name: 'state-change',
       promptPath: getProjectPath('src/prompts/tests/state-change.md'),
       description: '生成状态变更测试用例',
+      projectContextPrompt,
     });
   }
 
