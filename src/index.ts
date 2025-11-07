@@ -21,6 +21,10 @@ import { PublishCommentsTool } from './tools/publish-comments.js';
 import { TestMatrixAnalyzer } from './agents/test-matrix-analyzer.js';
 import { detectProjectTestStack } from './tools/detect-stack.js';
 import { ResolvePathTool } from './tools/resolve-path.js';
+import { WriteTestFileTool } from './tools/write-test-file.js';
+import { FetchCommitChangesTool } from './tools/fetch-commit-changes.js';
+import { AnalyzeCommitTestMatrixTool } from './tools/analyze-commit-test-matrix.js';
+import { RunTestsTool } from './tools/run-tests.js';
 
 dotenv.config();
 
@@ -36,6 +40,10 @@ let generateTestsTool: GenerateTestsTool;
 let analyzeTestMatrixTool: AnalyzeTestMatrixTool;
 let publishCommentsTool: PublishCommentsTool;
 let resolvePathTool: ResolvePathTool;
+let writeTestFileTool: WriteTestFileTool;
+let fetchCommitChangesTool: FetchCommitChangesTool;
+let analyzeCommitTestMatrixTool: AnalyzeCommitTestMatrixTool;
+let runTestsTool: RunTestsTool;
 
 function initialize() {
   try {
@@ -122,6 +130,16 @@ function initialize() {
       config
     );
 
+    writeTestFileTool = new WriteTestFileTool();
+    fetchCommitChangesTool = new FetchCommitChangesTool();
+    analyzeCommitTestMatrixTool = new AnalyzeCommitTestMatrixTool(
+      fetchCommitChangesTool,
+      resolvePathTool,
+      stateManager,
+      testMatrixAnalyzer
+    );
+    runTestsTool = new RunTestsTool();
+
     logger.info('Initialization complete');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -175,10 +193,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           '• 变更类型（新增/修改/删除）\n' +
           '• 增删行数统计\n' +
           '• 每个文件的 hunks（包含具体的变更行内容）\n' +
-          '• 完整的 diff 文本（带行号，标准 unified diff 格式）\n\n' +
+          '• 完整的 diff 文本（带行号，标准 unified diff 格式，使用 NEW_LINE_xxx 标记新行）\n\n' +
           '⚠️ 重要提示：\n' +
           '• 此工具返回的信息已经包含所有变更细节\n' +
-          '• hunks 字段包含每一行的具体变更（+/- 前缀）\n' +
+          '• hunks 字段包含每一行的具体变更（NEW_LINE_xxx 标记新行，DELETED 标记旧行）\n' +
           '• fullDiff 字段包含完整的 diff 文本\n' +
           '• 无需使用 git show、git diff 等命令\n' +
           '• Revision ID（如 D551414）不是 git commit hash，不能用于 git 命令',
@@ -195,6 +213,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ['revisionId'],
+        },
+      },
+      {
+        name: 'fetch-commit-changes',
+        description:
+          '从本地 Git 仓库中获取指定 commit 的变更内容。\n\n' +
+          '💡 使用场景：\n' +
+          '1. 代码合并后，根据 commit 生成功能清单和测试矩阵\n' +
+          '2. 无需 Phabricator 的环境下获取 diff\n' +
+          '3. 作为增量分析的基础数据源\n\n' +
+          '📤 输出信息：\n' +
+          '• commit 信息（hash、作者、提交时间、标题）\n' +
+          '• 变更文件列表（仅保留前端文件）\n' +
+          '• 每个文件的 hunks（NEW_LINE_xxx 标记新行）\n' +
+          '• 完整的 diff 文本（带 NEW_LINE_xxx 标记的新行号）',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            commitHash: {
+              type: 'string',
+              description: 'Git commit hash（支持短 hash）',
+            },
+            repoPath: {
+              type: 'string',
+              description: '本地仓库路径（默认当前工作目录）',
+            },
+          },
+          required: ['commitHash'],
         },
       },
       {
@@ -302,6 +348,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: 'analyze-commit-test-matrix',
+        description:
+          '分析单个 commit 的功能清单和测试矩阵。\n\n' +
+          '📋 推荐工作流程：\n' +
+          '1. 调用 fetch-commit-changes 获取 commit 的 diff（可选）\n' +
+          '2. 调用此工具分析功能清单和测试矩阵\n' +
+          '3. 将结果用于 generate-tests 或 run-tests\n\n' +
+          '⚙️ 自动执行的步骤：\n' +
+          '• 获取 commit diff（NEW_LINE_xxx 行号）\n' +
+          '• 解析项目根目录\n' +
+          '• 检测测试框架\n' +
+          '• 分析功能清单和测试矩阵',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            commitHash: {
+              type: 'string',
+              description: 'Git commit hash（支持短 hash）',
+            },
+            repoPath: {
+              type: 'string',
+              description: '本地仓库路径（默认当前工作目录）',
+            },
+            projectRoot: {
+              type: 'string',
+              description: '项目根目录的绝对路径（可选）',
+            },
+          },
+          required: ['commitHash'],
+        },
+      },
+      {
         name: 'generate-tests',
         description: 
           '基于测试矩阵生成具体的单元测试代码。\n' +
@@ -351,6 +429,71 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: 'run-tests',
+        description:
+          '在项目中执行测试命令。\n\n' +
+          '默认执行 `npm test -- --runInBand`，可以通过参数自定义命令。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectRoot: {
+              type: 'string',
+              description: '项目根目录（默认当前工作目录）',
+            },
+            command: {
+              type: 'string',
+              description: '要执行的命令（默认 npm）',
+            },
+            args: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '命令参数（默认 ["test", "--", "--runInBand"])',
+            },
+            timeoutMs: {
+              type: 'number',
+              description: '超时时间（毫秒，默认 600000）',
+            },
+          },
+        },
+      },
+      {
+        name: 'write-test-file',
+        description:
+          '将生成的测试用例写入文件。\n' +
+          '⚠️ 默认情况下，如果文件已存在会跳过写入（除非设置 overwrite=true）。\n\n' +
+          '使用场景：\n' +
+          '• 将 generate-tests 生成的测试代码保存到磁盘\n' +
+          '• 批量写入多个测试文件',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            files: {
+              type: 'array',
+              description: '要写入的测试文件列表',
+              items: {
+                type: 'object',
+                properties: {
+                  filePath: {
+                    type: 'string',
+                    description: '测试文件的绝对路径',
+                  },
+                  content: {
+                    type: 'string',
+                    description: '要写入的测试代码',
+                  },
+                  overwrite: {
+                    type: 'boolean',
+                    description: '是否覆盖已存在的文件（默认 false）',
+                  },
+                },
+                required: ['filePath', 'content'],
+              },
+            },
+          },
+          required: ['files'],
+        },
+      },
+      {
         name: 'publish-phabricator-comments',
         description: '发布评论到 Phabricator',
         inputSchema: {
@@ -384,7 +527,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['revisionId', 'comments'],
         },
-      },
+      }
     ],
   };
 });
@@ -443,6 +586,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   })),
                 })),
                 // 提供完整的 diff 文本（带行号）
+                fullDiff: frontendDiff.numberedRaw || frontendDiff.raw,
+              }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'fetch-commit-changes': {
+        const { commitHash, repoPath } = args as {
+          commitHash: string;
+          repoPath?: string;
+        };
+        const commitResult = await fetchCommitChangesTool.fetch({
+          commitHash,
+          repoPath,
+        });
+        const frontendDiff = fetchDiffTool.filterFrontendFiles(commitResult.diff);
+        logger.info(`Tool '${name}' completed successfully`, {
+          commit: commitResult.commitInfo.hash.substring(0, 7),
+          filesCount: frontendDiff.files.length,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                commit: commitResult.commitInfo,
+                files: frontendDiff.files.map(f => ({
+                  path: f.path,
+                  changeType: f.changeType,
+                  additions: f.additions,
+                  deletions: f.deletions,
+                  hunks: f.hunks.map(h => ({
+                    oldStart: h.oldStart,
+                    oldLines: h.oldLines,
+                    newStart: h.newStart,
+                    newLines: h.newLines,
+                    content: h.lines.join('\n'),
+                  })),
+                })),
                 fullDiff: frontendDiff.numberedRaw || frontendDiff.raw,
               }, null, 2),
             },
@@ -538,6 +721,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'analyze-commit-test-matrix': {
+        const input = args as {
+          commitHash: string;
+          repoPath?: string;
+          projectRoot?: string;
+        };
+        const result = await analyzeCommitTestMatrixTool.analyze({
+          commitHash: input.commitHash,
+          repoPath: input.repoPath,
+          projectRoot: input.projectRoot,
+        });
+        logger.info(`Tool '${name}' completed successfully`, {
+          commit: result.metadata.commitInfo?.hash?.substring(0, 7) || input.commitHash,
+          features: result.matrix.summary.totalFeatures,
+          scenarios: result.matrix.summary.totalScenarios,
+          estimatedTests: result.matrix.summary.estimatedTests,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
       case 'generate-tests': {
         const input = args as {
           revisionId: string;
@@ -565,6 +775,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'run-tests': {
+        const input = args as {
+          projectRoot?: string;
+          command?: string;
+          args?: string[];
+          timeoutMs?: number;
+        };
+        const result = await runTestsTool.run({
+          projectRoot: input.projectRoot,
+          command: input.command,
+          args: input.args,
+          timeoutMs: input.timeoutMs,
+        });
+        logger.info(`Tool '${name}' completed successfully`, {
+          success: result.success,
+          exitCode: result.exitCode,
+          durationMs: result.durationMs,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'write-test-file': {
+        const input = args as {
+          files: Array<{
+            filePath: string;
+            content: string;
+            overwrite?: boolean;
+          }>;
+        };
+        const results = await writeTestFileTool.writeMultiple(input.files);
+        const successCount = results.filter(r => r.success).length;
+        logger.info(`Tool '${name}' completed successfully`, {
+          total: results.length,
+          success: successCount,
+          failed: results.length - successCount,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: successCount,
+                total: results.length,
+                results,
+              }, null, 2),
             },
           ],
         };

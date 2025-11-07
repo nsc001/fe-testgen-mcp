@@ -62,6 +62,12 @@ export const TestMatrixAnalysis = z.object({
     revisionId: z.string(),
     framework: z.string().nullable(),
     duration: z.number(),
+    commitInfo: z.object({
+      hash: z.string(),
+      author: z.string(),
+      date: z.string(),
+      message: z.string(),
+    }).optional(),
   }),
 });
 export type TestMatrixAnalysis = z.infer<typeof TestMatrixAnalysis>;
