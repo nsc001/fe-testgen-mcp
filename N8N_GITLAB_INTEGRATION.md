@@ -2,11 +2,73 @@
 
 ## 概述
 
-针对 n8n 工作流与 GitLab 集成场景，新增了两个专用 MCP 工具，无需依赖 Phabricator 或本地 Git 操作，直接接受外部传入的 diff 内容。
+针对 n8n 工作流与 GitLab 集成场景，新增了**三个专用 MCP 工具**，无需依赖 Phabricator 或本地 Git 操作，直接接受外部传入的 diff 内容。
 
 ## 新增工具
 
-### 1. `analyze-raw-diff-test-matrix`
+### 1. `review-raw-diff` 🆕
+
+从外部传入的 raw diff 内容进行代码审查。
+
+#### 输入参数
+
+```json
+{
+  "rawDiff": "string (必需)",           // Unified diff 格式的原始文本
+  "identifier": "string (必需)",        // 唯一标识符（如 MR-123）
+  "projectRoot": "string (必需)",       // 项目根目录绝对路径
+  "metadata": {                          // 可选元数据
+    "title": "MR 标题",
+    "author": "作者名",
+    "mergeRequestId": "123",
+    "commitHash": "abc123",
+    "branch": "feature/xyz"
+  },
+  "topics": ["react", "typescript"],     // 可选，手动指定审查主题
+  "mode": "incremental",                 // 或 "full"
+  "forceRefresh": false                  // 是否强制刷新缓存
+}
+```
+
+#### 输出结果
+
+```json
+{
+  "summary": "Found 5 issues across 3 files",
+  "identifiedTopics": ["react", "typescript", "performance"],
+  "issues": [
+    {
+      "id": "...",
+      "file": "src/components/Button.tsx",
+      "line": 42,
+      "codeSnippet": "const onClick = () => { ... }",
+      "severity": "medium",
+      "topic": "react",
+      "message": "避免在渲染期间创建函数",
+      "suggestion": "使用 useCallback 包裹",
+      "confidence": 0.85
+    }
+  ],
+  "testingSuggestions": "建议为 Button 组件添加单元测试...",
+  "metadata": {
+    "mode": "incremental",
+    "agentsRun": ["react", "typescript", "performance"],
+    "duration": 4532,
+    "cacheHit": false
+  }
+}
+```
+
+**特性：**
+- ✅ 与 `review-frontend-diff` 相同的多 Agent 审查能力
+- ✅ 自动识别审查主题（React/TypeScript/性能/安全等）
+- ✅ 支持增量去重，避免重复评论
+- ✅ 同一行多个评论自动合并
+- ✅ 支持仓库级 prompt 配置、Monorepo 子项目
+
+---
+
+### 2. `analyze-raw-diff-test-matrix`
 
 从外部传入的 raw diff 内容分析测试矩阵。
 
