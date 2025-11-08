@@ -99,7 +99,8 @@ export class Orchestrator {
       if (aSev !== bSev) {
         return bSev - aSev;
       }
-      return a.line - b.line;
+      // 使用默认值处理可能为 undefined 的情况
+      return (a.line ?? 0) - (b.line ?? 0);
     });
 
     return allIssues;

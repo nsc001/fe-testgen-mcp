@@ -134,6 +134,7 @@ describe('diff-parser with deleted lines', () => {
 
   it('should identify deleted line as not reviewable', () => {
     const reviewableLines = getReviewableLines(file);
+    void reviewableLines;
     
     // Line 13 (old line with "const d = 4;") is deleted
     // So line 13 in new file should be "const e = 5;" (context)

@@ -29,6 +29,17 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 - ✅ 支持 Monorepo (pnpm/yarn/npm workspaces, Lerna, Nx, Rush)
 - ✅ 自动检测测试框架
 
+### 架构 V2（实验性）
+- 🧠 **ReAct Agent 引擎**：`src/core/react-engine.ts`，支持 Thought → Action → Observation 循环
+- 🛠️ **统一工具基类**：`BaseTool` + `ToolRegistry`，提供生命周期管理与指标采集
+- 🧱 **Pipeline DSL**：`config/pipelines.yaml` + `PipelineExecutor`，声明式编排工作流
+- 🧠 **Context & Memory**：`ContextStore` / `Memory` 管理短期上下文与长期记忆
+- 🔌 **CodeChangeSource 抽象**：统一 Phabricator / Git / Raw diff 接入
+- 📚 详细文档：`ARCHITECTURE_V2.md`、`REFACTOR_SUMMARY.md`
+- 🚀 体验入口：`src/index-v2.ts`（实验性 MCP Server，构建后可通过 `node dist/index-v2.js` 启动）
+
+> 当前仍默认使用 V1 流程；可按需逐步迁移工具/Agent 到 V2 架构。
+
 ## 安装
 
 ```bash

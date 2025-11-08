@@ -1,0 +1,39 @@
+pipelines:
+  review:
+    description: "默认前端代码审查流程"
+    steps:
+      - name: fetchDiff
+        type: tool
+        ref: fetch-diff
+        input:
+          revisionId: "{{context.revisionId}}"
+      - name: review
+        type: tool
+        ref: review-frontend-diff
+        input:
+          revisionId: "{{context.revisionId}}"
+          mode: "{{context.reviewMode || 'full'}}"
+          publish: "{{context.publish || false}}"
+  test-generation:
+    description: "默认单元测试生成流程"
+    steps:
+      - name: analyze
+        type: tool
+        ref: analyze-test-matrix
+        input:
+          revisionId: "{{context.revisionId}}"
+          projectRoot: "{{context.projectRoot}}"
+      - name: generate
+        type: tool
+        ref: generate-tests
+        input:
+          revisionId: "{{context.revisionId}}"
+          projectRoot: "{{context.projectRoot}}"
+          mode: "{{context.mode || 'incremental'}}"
+      - name: write
+        type: tool
+        ref: write-test-file
+        input:
+          projectRoot: "{{context.projectRoot}}"
+          filePath: "{{context.outputFilePath}}"
+          content: "{{steps.generate.data.generatedTests || ''}}"
