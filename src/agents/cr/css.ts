@@ -58,7 +58,7 @@ export class CSSAgent extends BaseAgent<Issue> {
     
     return `分析以下代码变更，识别 CSS 样式相关问题：
 
-${this.getLineNumberInstructions()}
+${this.getCodeSnippetInstructions()}
 
 **CSS 行号特别提示**：
 - 样式文件经常包含空行或注释行，请始终报告**实际包含问题代码**的 NEW_LINE 行号
@@ -79,7 +79,7 @@ ${fileList}
 
 返回 JSON 格式的问题列表，每个问题包含：
 - file: 文件路径（必须从上面的文件列表中选择，保持完全一致，包括扩展名）
-- line: **新文件的行号**（必须是 diff 中 + 号后面显示的行号，且必须是实际包含问题代码的行，不要使用空行或注释行的行号）
+- codeSnippet: **问题代码片段**（从 diff 中复制有问题的代码，不要包含 NEW_LINE_xxx 前缀）
 - severity: critical/high/medium/low
 - message: 问题描述
 - suggestion: 修复建议
@@ -116,12 +116,13 @@ ${fileList}
         const issue: Issue = {
           id: generateIssueFingerprint(
             filePath,
-            [item.line || 0, item.line || 0],
+            (item.codeSnippet || item.code_snippet) || [item.line || 0, item.line || 0],
             'css',
             item.message || ''
           ),
           file: filePath,
-          line: item.line || 0,
+          line: item.line,
+          codeSnippet: item.codeSnippet || item.code_snippet,
           severity: item.severity || 'medium',
           topic: CRTopic.parse('css'),
           message: item.message || '',

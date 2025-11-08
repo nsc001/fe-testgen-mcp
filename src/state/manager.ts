@@ -15,7 +15,8 @@ export interface RevisionState {
   issues: Array<{
     id: string;
     file: string;
-    line: number;
+    line?: number;
+    codeSnippet?: string;
     severity: string;
     category: string;
     message: string;
@@ -102,6 +103,7 @@ export class StateManager {
       id: issue.id,
       file: issue.file,
       line: issue.line,
+      codeSnippet: issue.codeSnippet,
       severity: issue.severity,
       category: issue.topic,
       message: issue.message,

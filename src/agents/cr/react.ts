@@ -47,7 +47,7 @@ export class ReactAgent extends BaseAgent<Issue> {
     
     return `分析以下代码变更，识别 React 相关问题：
 
-${this.getLineNumberInstructions()}
+${this.getCodeSnippetInstructions()}
 
 **变更的文件列表**：
 - ${this.buildFilePathsList(files)}
@@ -62,7 +62,7 @@ ${fileList}
 
 返回 JSON 格式的问题列表，每个问题包含：
 - file: 文件路径（必须从上面的文件列表中选择，保持完全一致）
-- line: **新文件的行号**（从 NEW_LINE_xxx 中提取数字，绝不使用 DELETED 行的数字）
+- codeSnippet: **问题代码片段**（从 diff 中复制有问题的代码，不要包含 NEW_LINE_xxx 前缀）
 - severity: critical/high/medium/low
 - message: 问题描述
 - suggestion: 修复建议
@@ -73,7 +73,7 @@ ${fileList}
 [
   {
     "file": "src/components/Button.tsx",
-    "line": 42,
+    "codeSnippet": "useEffect(() => {",
     "severity": "high",
     "message": "useEffect 缺少依赖项",
     "suggestion": "在依赖数组中添加 state 变量",
@@ -100,15 +100,26 @@ ${fileList}
           return null;
         }
 
+        // 优先使用 codeSnippet，向后兼容 line
+        const codeSnippet = item.codeSnippet || item.code_snippet;
+        const line = item.line;
+        
+        // 如果既没有 codeSnippet 也没有 line，跳过
+        if (!codeSnippet && !line) {
+          logger.warn('Issue missing both codeSnippet and line', { item });
+          return null;
+        }
+
         const issue: Issue = {
           id: generateIssueFingerprint(
             filePath,
-            [item.line || 0, item.line || 0],
+            codeSnippet || [line || 0, line || 0],
             'react',
             item.message || ''
           ),
           file: filePath,
-          line: item.line || 0,
+          line,
+          codeSnippet,
           severity: item.severity || 'medium',
           topic: CRTopic.parse('react'),
           message: item.message || '',
