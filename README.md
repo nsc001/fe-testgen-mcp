@@ -22,7 +22,7 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 - ✅ 支持 Vitest/Jest
 - ✅ Embedding 增强的测试生成
 - ✅ 参考现有测试风格
-- ✅ 支持 n8n + GitLab/GitHub 集成（接受外部 raw diff）
+- ✅ 支持 n8n + GitLab/GitHub 集成（接受外部 raw diff） -> [快速指南](./N8N_INTEGRATION.md)
 
 ### 项目支持
 - ✅ 自动检测项目根目录
@@ -217,6 +217,8 @@ EOF
 
 ## 使用
 
+- 👉 **快速集成 n8n/GitLab/GitHub 工作流**：详见 [N8N_INTEGRATION.md](./N8N_INTEGRATION.md)
+
 ### 运行模式
 
 本项目基于 `fastmcp` 库实现，提供简化的 API 和内置 HTTP Streaming 支持。
@@ -342,6 +344,7 @@ tracking:
 > - ✅ **run-tests** - 执行测试命令并解析结果
 > - ✅ **analyze-raw-diff-test-matrix** - n8n/GitLab 集成的测试矩阵分析工具
 > - ✅ **generate-tests-from-raw-diff** - n8n/GitLab 集成的端到端测试生成工具
+> - ✅ **n8n 集成指南** - 详见 [N8N_INTEGRATION.md](./N8N_INTEGRATION.md)
 > - 🚧 **其他工具** - 待实现（更多 n8n 集成、测试增强等）
 
 #### 1. fetch-diff
@@ -753,13 +756,9 @@ tracking:
 3. [Code 节点] 格式化为 GitLab 评论
 4. [GitLab 节点] 发布 MR 评论
 
-**详细文档：** 查看 [N8N_GITLAB_INTEGRATION.md](./N8N_GITLAB_INTEGRATION.md) 了解完整的 n8n 工作流配置和示例。
+**详细文档：** 查看 [N8N_INTEGRATION.md](./N8N_INTEGRATION.md) 了解完整的 n8n 工作流配置和示例。
 
 ---
-
-## 完整工作流示例
-
-查看 [WORKFLOW_EXAMPLES.md](./WORKFLOW_EXAMPLES.md) 了解完整的使用示例。
 
 ## 架构
 
