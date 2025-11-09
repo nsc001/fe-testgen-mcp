@@ -42,14 +42,6 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 - 📤 **Metrics 导出**：支持 JSON / Prometheus / Custom 格式，预留远程上传接口
 - ⚡ **性能优化**：惰性加载、并行执行、LLM 批处理、分层缓存
 
-**文档**：
-- `MIGRATION_COMPLETED.md` - 架构迁移完成报告（v3.0.0）
-- `REFACTOR_SUMMARY.md` - 重构总结
-- `ARCHITECTURE_REDESIGN.md` - 架构设计文档
-- `WORKFLOW_EXAMPLES.md` - 工作流示例
-- `FUNCTION_CALLING_GUIDE.md` - Function Calling 使用指南
-- `HTTP_TRANSPORT_GUIDE.md` - HTTP Transport 使用指南
-
 ## 安装
 
 ```bash

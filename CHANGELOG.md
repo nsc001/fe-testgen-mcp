@@ -7,8 +7,9 @@
 - **fetch-commit-changes 工具**: 从本地 Git 仓库获取指定 commit 的变更内容
 - **analyze-commit-test-matrix 工具**: 基于 commit 分析功能清单和测试矩阵
 - **run-tests 工具**: 在项目中执行测试命令（支持自定义命令和超时控制）
-- **架构设计文档**: `ARCHITECTURE_REDESIGN.md` 规划了 SSE/HTTP Stream 传输和 ReAct 模式智能体架构
-- **实施总结文档**: `IMPLEMENTATION_SUMMARY.md` 记录了所有改进细节和测试建议
+- **HTTP Transport**: 支持通过 HTTP API 调用 MCP 工具
+- **Function Calling**: 自动根据工具元数据生成 OpenAI 函数定义，提升决策准确性
+- **Prometheus Exporter**: 支持 Prometheus metrics 导出
 
 ### Changed
 - **优化 diff 行号格式**: 使用 `NEW_LINE_xxx` 和 `DELETED (was line xxx)` 前缀，使行号更加清晰明确
@@ -41,5 +42,6 @@
 
 ### 下一步
 1. 更新剩余 CR agents (css, typescript, performance, security, i18n)
-2. 支持 HTTP/SSE transport
+2. 支持 SSE (Server-Sent Events) 实时推送
 3. 与 CI 集成自动执行测试流程
+4. Grafana 仪表盘模板
