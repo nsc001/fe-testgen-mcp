@@ -19,6 +19,7 @@ import { OpenAIClient } from '../clients/openai.js';
 import { EmbeddingClient } from '../clients/embedding.js';
 import { StateManager } from '../state/manager.js';
 import { ContextStore, AgentContext, Thought, Action, Observation } from '../core/context.js';
+import { AgentCoordinator, AgentTask } from '../core/agent-coordinator.js';
 import { logger } from '../utils/logger.js';
 import { getMetrics } from '../utils/metrics.js';
 import type { Issue } from '../schemas/issue.js';
@@ -32,7 +33,7 @@ import { SecurityAgent } from './cr/security.js';
 import { AccessibilityAgent } from './cr/accessibility.js';
 import { CSSAgent } from './cr/css.js';
 import { I18nAgent } from './cr/i18n.js';
-import { BaseAgent } from './base.js';
+import { AgentResult, BaseAgent } from './base.js';
 
 export interface ReviewAgentConfig {
   maxSteps: number;
@@ -41,6 +42,7 @@ export interface ReviewAgentConfig {
   minConfidence?: number;
   autoPublish?: boolean; // 是否自动发布评论
   parallelReview?: boolean; // 是否并行审查
+  maxConcurrency?: number; // 最大并发数，默认 3
 }
 
 export interface ReviewAgentResult {
@@ -273,7 +275,7 @@ export class ReviewAgent {
   }
 
   /**
-   * 执行审查
+   * 执行审查（使用 AgentCoordinator 进行并发控制）
    */
   private async executeReview(
     diff: Diff,
@@ -284,6 +286,7 @@ export class ReviewAgent {
     logger.info('[ReviewAgent] Executing review', {
       dimensions: dimensions.map((d) => d.name),
       parallel: config.parallelReview,
+      maxConcurrency: config.maxConcurrency,
     });
 
     const reviewContext = {
@@ -294,32 +297,47 @@ export class ReviewAgent {
       })),
     };
 
-    // 并行或串行执行审查
     const allIssues: Issue[] = [];
 
     if (config.parallelReview !== false) {
-      // 并行执行
+      // 使用 AgentCoordinator 进行并行执行（带并发控制）
       this.addThought(context, {
-        content: `Executing ${dimensions.length} dimensions in parallel`,
+        content: `Executing ${dimensions.length} dimensions in parallel with max concurrency ${config.maxConcurrency || 3}`,
         timestamp: Date.now(),
       });
 
-      const results = await Promise.all(
-        dimensions.map(async (dimension) => {
-          try {
-            logger.info(`[ReviewAgent] Running ${dimension.name} review`);
-            const result = await dimension.agent.execute(reviewContext);
-            return result.items;
-          } catch (error) {
-            logger.error(`[ReviewAgent] ${dimension.name} review failed`, { error });
-            return [];
-          }
-        })
+      const coordinator = new AgentCoordinator<typeof reviewContext, AgentResult<Issue>>(
+        this.contextStore,
+        {
+          maxConcurrency: config.maxConcurrency || 3,
+          continueOnError: true,
+          retryOnError: true,
+          maxRetries: 2,
+        }
       );
 
-      for (const issues of results) {
-        allIssues.push(...issues);
+      const tasks: AgentTask<typeof reviewContext, AgentResult<Issue>>[] = dimensions.map((dimension) => ({
+        id: dimension.name,
+        name: dimension.name,
+        agent: dimension.agent,
+        input: reviewContext,
+        priority: dimension.name === 'security' ? 10 : 5, // 安全审查优先级最高
+      }));
+
+      const result = await coordinator.executeParallel(tasks);
+
+      // 合并结果
+      for (const taskResult of result.results) {
+        if (taskResult.success && taskResult.output) {
+          allIssues.push(...taskResult.output.items);
+        }
       }
+
+      logger.info('[ReviewAgent] Parallel review completed', {
+        successCount: result.successCount,
+        errorCount: result.errorCount,
+        totalIssues: allIssues.length,
+      });
     } else {
       // 串行执行
       for (const dimension of dimensions) {

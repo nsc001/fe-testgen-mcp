@@ -19,10 +19,20 @@ import { EmbeddingClient } from '../clients/embedding.js';
 import { StateManager } from '../state/manager.js';
 import { CodeChangeSource } from '../core/code-change-source.js';
 import { ContextStore, AgentContext, Thought, Action, Observation } from '../core/context.js';
+import { AgentCoordinator, AgentTask } from '../core/agent-coordinator.js';
 import { logger } from '../utils/logger.js';
 import { getMetrics } from '../utils/metrics.js';
 import type { TestCase } from '../schemas/test-plan.js';
 import type { Diff } from '../schemas/diff.js';
+import type { TestMatrix } from '../schemas/test-matrix.js';
+import { TestMatrixAnalyzer } from './test-matrix-analyzer.js';
+import {
+  HappyPathTestAgent,
+  EdgeCaseTestAgent,
+  ErrorPathTestAgent,
+  StateChangeTestAgent,
+} from './tests/index.js';
+import { AgentResult, BaseAgent } from './base.js';
 
 export interface TestAgentConfig {
   maxSteps: number;
@@ -31,6 +41,9 @@ export interface TestAgentConfig {
   scenarios?: string[];
   autoWrite?: boolean; // 是否自动写入文件
   autoRun?: boolean; // 是否自动执行测试
+  maxConcurrency?: number; // 最大并发数，默认 3
+  projectRoot?: string; // 项目根目录
+  framework?: string; // 测试框架
 }
 
 export interface TestAgentResult {
@@ -98,7 +111,7 @@ export class TestAgent {
       });
 
       // Step 2: 分析测试矩阵
-      const matrix = await this.analyzeTestMatrix(diff, context);
+      const matrix = await this.analyzeTestMatrix(diff, config, context);
       this.addObservation(context, {
         type: 'tool_result',
         source: 'analyze-test-matrix',
@@ -159,45 +172,209 @@ export class TestAgent {
   /**
    * 分析测试矩阵
    */
-  private async analyzeTestMatrix(diff: Diff, context: AgentContext): Promise<unknown> {
+  private async analyzeTestMatrix(
+    diff: Diff,
+    config: TestAgentConfig,
+    context: AgentContext
+  ): Promise<TestMatrix> {
     logger.info('[TestAgent] Analyzing test matrix');
 
-    // TODO: 调用 TestMatrixAnalyzer
-    // 这里简化处理
-    const matrix = {
-      features: diff.files.map(f => f.path),
-      scenarios: ['happy-path', 'edge-case', 'error-path'],
+    const analyzer = new TestMatrixAnalyzer(this._llm);
+
+    const reviewContext = {
+      diff: diff.numberedRaw || diff.raw,
+      files: diff.files.map((f) => ({
+        path: f.path,
+        content: f.hunks.map((h) => h.lines.join('\n')).join('\n'),
+      })),
+      framework: config.framework,
     };
 
-    this.addThought(context, {
-      content: `Identified ${diff.files.length} changed files. Will generate tests for scenarios: ${matrix.scenarios.join(', ')}`,
-      timestamp: Date.now(),
-    });
+    try {
+      const result = await analyzer.execute(reviewContext);
 
-    return matrix;
+      if (!result.items || result.items.length === 0 || !result.items[0]) {
+        throw new Error('Test matrix analysis returned no results');
+      }
+
+      const matrixData = result.items[0];
+      const features = matrixData.features || [];
+      const scenarios = matrixData.scenarios || [];
+
+      // 构建测试矩阵
+      const matrix: TestMatrix = {
+        features,
+        scenarios,
+        summary: {
+          totalFeatures: features.length,
+          totalScenarios: scenarios.length,
+          estimatedTests: scenarios.length,
+          coverage: {
+            'happy-path': scenarios.filter((s) => s.scenario === 'happy-path').length,
+            'edge-case': scenarios.filter((s) => s.scenario === 'edge-case').length,
+            'error-path': scenarios.filter((s) => s.scenario === 'error-path').length,
+            'state-change': scenarios.filter((s) => s.scenario === 'state-change').length,
+          },
+        },
+      };
+
+      this.addThought(context, {
+        content: `Identified ${features.length} features and ${scenarios.length} test scenarios`,
+        timestamp: Date.now(),
+      });
+
+      logger.info('[TestAgent] Test matrix analyzed', {
+        features: features.length,
+        scenarios: scenarios.length,
+      });
+
+      return matrix;
+    } catch (error) {
+      logger.error('[TestAgent] Test matrix analysis failed', { error });
+
+      // 返回空矩阵
+      this.addThought(context, {
+        content: `Test matrix analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+        timestamp: Date.now(),
+      });
+
+      return {
+        features: [],
+        scenarios: [],
+        summary: {
+          totalFeatures: 0,
+          totalScenarios: 0,
+          estimatedTests: 0,
+          coverage: {
+            'happy-path': 0,
+            'edge-case': 0,
+            'error-path': 0,
+            'state-change': 0,
+          },
+        },
+      };
+    }
   }
 
   /**
-   * 生成测试用例
+   * 生成测试用例（使用 AgentCoordinator 并行生成）
    */
   private async generateTests(
-    _diff: Diff,
-    _matrix: unknown,
-    _config: TestAgentConfig,
+    diff: Diff,
+    matrix: TestMatrix,
+    config: TestAgentConfig,
     context: AgentContext
   ): Promise<TestCase[]> {
     logger.info('[TestAgent] Generating test cases');
 
-    // TODO: 调用测试生成 Agent
-    // 这里返回空数组作为示例
-    const tests: TestCase[] = [];
+    if (matrix.features.length === 0 || matrix.scenarios.length === 0) {
+      logger.warn('[TestAgent] No features or scenarios found, skipping test generation');
+      this.addThought(context, {
+        content: 'No features or scenarios found, skipping test generation',
+        timestamp: Date.now(),
+      });
+      return [];
+    }
+
+    // 准备测试生成的上下文
+    const reviewContext = {
+      diff: diff.numberedRaw || diff.raw,
+      files: diff.files.map((f) => ({
+        path: f.path,
+        content: f.hunks.map((h) => h.lines.join('\n')).join('\n'),
+      })),
+      metadata: {
+        framework: config.framework || 'vitest',
+        existingTests: undefined, // TODO: 可以通过 Embedding 查找相似测试
+      },
+    };
+
+    // 根据 scenario 选择对应的 Agent
+    const scenarioAgents = new Map<string, BaseAgent<TestCase>>();
+    scenarioAgents.set('happy-path', new HappyPathTestAgent(this._llm));
+    scenarioAgents.set('edge-case', new EdgeCaseTestAgent(this._llm));
+    scenarioAgents.set('error-path', new ErrorPathTestAgent(this._llm));
+    scenarioAgents.set('state-change', new StateChangeTestAgent(this._llm));
+
+    // 获取需要生成的场景类型（基于矩阵或配置）
+    const scenariosToGenerate = config.scenarios || ['happy-path', 'edge-case', 'error-path', 'state-change'];
+    const applicableScenarios = scenariosToGenerate.filter((s) => scenarioAgents.has(s));
+
+    if (applicableScenarios.length === 0) {
+      logger.warn('[TestAgent] No applicable scenarios found');
+      return [];
+    }
 
     this.addThought(context, {
-      content: `Generated ${tests.length} test cases`,
+      content: `Generating tests for scenarios: ${applicableScenarios.join(', ')}`,
       timestamp: Date.now(),
     });
 
-    return tests;
+    // 使用 AgentCoordinator 并行生成测试
+    const coordinator = new AgentCoordinator<typeof reviewContext, AgentResult<TestCase>>(
+      this.contextStore,
+      {
+        maxConcurrency: config.maxConcurrency || 3,
+        continueOnError: true,
+        retryOnError: true,
+        maxRetries: 2,
+      }
+    );
+
+    const tasks: AgentTask<typeof reviewContext, AgentResult<TestCase>>[] = applicableScenarios.map((scenario) => ({
+      id: scenario,
+      name: `test-gen-${scenario}`,
+      agent: scenarioAgents.get(scenario)!,
+      input: reviewContext,
+      priority: scenario === 'happy-path' ? 10 : 5, // happy-path 优先级最高
+    }));
+
+    const result = await coordinator.executeParallel(tasks);
+
+    // 合并所有测试结果
+    const allTests: TestCase[] = [];
+    for (const taskResult of result.results) {
+      if (taskResult.success && taskResult.output) {
+        allTests.push(...taskResult.output.items);
+      }
+    }
+
+    // 去重（基于测试 ID）
+    const uniqueTestsMap = new Map<string, TestCase>();
+    for (const test of allTests) {
+      if (test.id && !uniqueTestsMap.has(test.id)) {
+        uniqueTestsMap.set(test.id, test);
+      }
+    }
+
+    let finalTests = Array.from(uniqueTestsMap.values());
+
+    // 限制测试数量（如果配置了 maxTests）
+    if (config.maxTests && finalTests.length > config.maxTests) {
+      // 按置信度排序，保留前 N 个
+      finalTests = finalTests
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, config.maxTests);
+
+      logger.info('[TestAgent] Limited test cases', {
+        original: uniqueTestsMap.size,
+        limited: finalTests.length,
+      });
+    }
+
+    this.addThought(context, {
+      content: `Generated ${finalTests.length} test cases (from ${applicableScenarios.length} scenarios)`,
+      timestamp: Date.now(),
+    });
+
+    logger.info('[TestAgent] Test cases generated', {
+      totalScenarios: applicableScenarios.length,
+      totalTests: finalTests.length,
+      successCount: result.successCount,
+      errorCount: result.errorCount,
+    });
+
+    return finalTests;
   }
 
   /**
