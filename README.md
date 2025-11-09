@@ -39,7 +39,7 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 - 🧠 **Context & Memory**：短期上下文与长期记忆管理
 - 🔌 **CodeChangeSource**：统一 Phabricator / Git / Raw diff 接入
 - 💉 **AppContext**：轻量级依赖注入容器
-- 📤 **Metrics 导出**：支持 JSON / Prometheus / Custom 格式，预留远程上传接口
+- 📤 **监控数据上报**：自动上报工具调用、服务器事件、错误等到远程监控服务
 - ⚡ **性能优化**：惰性加载、并行执行、LLM 批处理、分层缓存
 
 ## 安装
@@ -87,6 +87,14 @@ STATE_DIR=.state       # 默认值
 
 # 安全开关
 ALLOW_PUBLISH_COMMENTS=false  # 默认值，设为 true 允许发布评论
+
+# 监控数据上报配置（可选）
+TRACKING_ENABLED=true                # 是否启用上报（默认 true）
+TRACKING_APP_ID=MCP_SERVICE          # 应用标识
+TRACKING_APP_VERSION=3.0.0           # 应用版本
+TRACKING_ENV=prod                    # 环境：dev/test/prod
+TRACKING_MEASUREMENT=mcp_service_metrics  # 指标名称
+TRACKING_METRICS_TYPE=metricsType1   # 指标类型
 ```
 
 **注意：** 不需要设置 `MCP_MODE` 或 `LOG_LEVEL`，这些是其他项目的配置。
@@ -211,46 +219,59 @@ EOF
 
 ### 运行模式
 
-#### 1. Stdio（默认）
+本项目基于 `fastmcp` 库实现，提供简化的 API 和内置 HTTP Streaming 支持。
+
+#### Stdio 模式（默认）
 
 ```bash
 npm start
 ```
 
 - 通过 stdio 与客户端通信
-- 兼容所有支持 MCP 协议的客户端（如 Cursor）
+- 兼容所有支持 MCP 协议的客户端（如 Cursor、Claude Desktop）
 
-#### 2. HTTP API
+#### HTTP Streaming 模式
 
 ```bash
 # 方法 1：命令行参数
-npm start -- --transport=http
+npm start -- --transport=httpStream
 
 # 方法 2：环境变量
-TRANSPORT_MODE=http HTTP_PORT=3000 npm start
+TRANSPORT_MODE=httpStream HTTP_PORT=3000 npm start
 ```
 
-**默认端点**：
-- `GET  /api/tools` - 列出可用工具
-- `POST /api/tools/call` - 调用工具（JSON 请求）
-- `GET  /api/metrics` - Prometheus 指标
-- `GET  /api/health` - 健康检查
+**端点说明**：
+- `POST http://localhost:3000/mcp` - MCP 主端点（HTTP Streaming）
+- `GET http://localhost:3000/sse` - SSE 端点（自动可用）
 
-> 详细用法请参阅 [HTTP_TRANSPORT_GUIDE.md](./HTTP_TRANSPORT_GUIDE.md)
+**FastMCP 特性**：
+- ✅ 内置 HTTP Streaming / SSE 支持
+- ✅ 自动工具注册和连接管理
+- ✅ 简化的 API 设计
+- ✅ 完整的监控数据上报功能
 
-#### 3. Prometheus Metrics
+#### 监控数据上报
 
-HTTP 模式自动暴露 `/api/metrics` 端点，支持 Prometheus 抓取：
+本项目支持将运行状态、工具调用情况、错误信息等实时上报到远程监控服务。
+
+**配置示例**（`config.yaml`）：
 
 ```yaml
-scrape_configs:
-  - job_name: 'fe-testgen-mcp'
-    static_configs:
-      - targets: ['localhost:3000']
-    metrics_path: '/api/metrics'
+tracking:
+  enabled: true
+  appId: MCP_SERVICE
+  appVersion: 3.0.0
+  env: prod  # dev（不上报）、test、prod
+  measurement: mcp_service_metrics
 ```
 
-Prometheus 指标前缀默认为 `fe_testgen_mcp_`，并自动附带 `service`、`version` 标签。
+**自动上报事件**：
+- 🚀 服务器生命周期事件（启动、关闭）
+- 🔧 工具调用事件（耗时、状态）
+- 📊 Metrics 指标
+- ❌ 错误事件
+
+> 详细配置和使用请参阅 [TRACKING_GUIDE.md](./TRACKING_GUIDE.md)
 
 ### 作为 MCP Server
 

@@ -45,6 +45,15 @@ export const configSchema = z.object({
   projectContextPrompt: z.string().optional(),
   // 被测项目的根目录路径（可选，默认为当前工作目录）
   projectRoot: z.string().optional(),
+  // 监控数据上报配置（可选）
+  tracking: z.object({
+    enabled: z.boolean().default(true),
+    appId: z.string().default('MCP_SERVICE'),
+    appVersion: z.string().optional(),
+    env: z.enum(['dev', 'test', 'prod']).default('prod'),
+    measurement: z.string().default('mcp_service_metrics'),
+    metricsType: z.string().default('metricsType1'),
+  }).optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;

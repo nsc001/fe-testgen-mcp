@@ -71,3 +71,13 @@ testScenarios:
   - error-path
   - state-change
 
+# 监控数据上报配置（可选）
+# 开发环境不上报，其他环境统一使用测试环境地址
+tracking:
+  enabled: true
+  appId: MCP_SERVICE
+  appVersion: 3.0.0
+  env: prod  # dev（不上报）、test、prod（统一使用测试环境地址）
+  measurement: mcp_service_metrics
+  metricsType: metricsType1
+

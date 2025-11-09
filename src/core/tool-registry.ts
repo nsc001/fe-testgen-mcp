@@ -55,4 +55,11 @@ export class ToolRegistry {
   listMetadata(): ToolMetadata[] {
     return Array.from(this.toolMetadata.values());
   }
+
+  async listAll(): Promise<BaseTool<any, any>[]> {
+    // 先加载所有惰性工具
+    const lazyNames = Array.from(this.lazyTools.keys());
+    await Promise.all(lazyNames.map(name => this.get(name)));
+    return this.list();
+  }
 }

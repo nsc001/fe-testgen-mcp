@@ -8,6 +8,7 @@ import type { PhabricatorClient } from '../clients/phabricator.js';
 import type { Cache } from '../cache/cache.js';
 import type { StateManager } from '../state/manager.js';
 import type { ContextStore, Memory } from './context.js';
+import type { MCPTrackingService } from '../utils/tracking-service.js';
 
 export interface AppContext {
   openai: OpenAIClient;
@@ -17,6 +18,7 @@ export interface AppContext {
   state: StateManager;
   contextStore: ContextStore;
   memory: Memory;
+  tracking?: MCPTrackingService;
 }
 
 let currentContext: AppContext | null = null;
