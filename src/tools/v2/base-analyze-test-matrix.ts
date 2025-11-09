@@ -1,15 +1,15 @@
 /**
- * 测试矩阵分析的共享逻辑
+ * BaseAnalyzeTestMatrixV2 - 测试矩阵分析公共逻辑
  */
 
-import { ResolvePathTool } from './resolve-path.js';
-import { detectProjectTestStack } from './detect-stack.js';
-import { TestMatrixAnalyzer } from '../agents/test-matrix-analyzer.js';
-import { StateManager } from '../state/manager.js';
-import { getTestStackDetectionPath } from '../utils/project-root.js';
-import type { TestMatrixAnalysis } from '../schemas/test-matrix.js';
-import type { Diff } from '../schemas/diff.js';
-import { logger } from '../utils/logger.js';
+import { ResolvePathTool } from '../resolve-path.js';
+import { detectProjectTestStack } from '../detect-stack.js';
+import { TestMatrixAnalyzer } from '../../agents/test-matrix-analyzer.js';
+import { StateManager } from '../../state/manager.js';
+import { getTestStackDetectionPath } from '../../utils/project-root.js';
+import type { TestMatrixAnalysis } from '../../schemas/test-matrix.js';
+import type { Diff } from '../../schemas/diff.js';
+import { logger } from '../../utils/logger.js';
 
 export interface AnalyzeContext {
   diff: Diff;
@@ -30,19 +30,13 @@ export interface AnalyzeContext {
   };
 }
 
-/**
- * 共享的测试矩阵分析逻辑
- */
-export class BaseAnalyzeTestMatrix {
+export class BaseAnalyzeTestMatrixV2 {
   constructor(
     private resolvePathTool: ResolvePathTool,
     private stateManager: StateManager,
     private analyzer: TestMatrixAnalyzer
   ) {}
 
-  /**
-   * 执行测试矩阵分析
-   */
   async analyze(context: AnalyzeContext): Promise<TestMatrixAnalysis> {
     const startTime = Date.now();
     const { diff, revisionId, projectRoot, metadata, messages } = context;
@@ -53,6 +47,7 @@ export class BaseAnalyzeTestMatrix {
       (metadata?.commitInfo
         ? `No frontend files found in commit ${metadata.commitInfo.hash}. Total files: ${diff.files.length}`
         : `没有前端文件变更。总文件数: ${diff.files.length}`);
+
     const noFeaturesMessage =
       messages?.noFeatures?.(diff) ??
       (() => {
@@ -83,7 +78,6 @@ export class BaseAnalyzeTestMatrix {
       throw new Error(noFrontendFilesMessage);
     }
 
-    // 1. 解析项目根目录
     const filePaths = diff.files.map(f => f.path);
     const resolveResult = await this.resolvePathTool.resolve({
       paths: filePaths,
@@ -102,7 +96,6 @@ export class BaseAnalyzeTestMatrix {
       workspaceType: resolveResult.workspaceType,
     };
 
-    // 2. 检测测试框架
     const testDetectionPath = getTestStackDetectionPath(projectRootInfo, filePaths[0]);
     const stack = await detectProjectTestStack(testDetectionPath);
     const framework = stack.unit || 'vitest';
@@ -112,7 +105,6 @@ export class BaseAnalyzeTestMatrix {
       detectionPath: testDetectionPath,
     });
 
-    // 3. 构建分析上下文
     const analysisContext = {
       diff: diff.numberedRaw || diff.raw,
       files: diff.files.map(f => ({
@@ -122,7 +114,6 @@ export class BaseAnalyzeTestMatrix {
       framework,
     };
 
-    // 验证 diff 内容
     if (!analysisContext.diff || analysisContext.diff.trim().length === 0) {
       throw new Error(emptyDiffMessage);
     }
@@ -137,7 +128,6 @@ export class BaseAnalyzeTestMatrix {
       filePaths: analysisContext.files.map(f => f.path),
     });
 
-    // 4. 执行矩阵分析
     logger.info('Analyzing test matrix...');
     const analysisResult = await this.analyzer.execute(analysisContext);
 
@@ -147,7 +137,6 @@ export class BaseAnalyzeTestMatrix {
 
     const matrixData = analysisResult.items[0];
 
-    // 检查是否有功能变更
     if (!matrixData.features || matrixData.features.length === 0) {
       logger.warn('No features detected in test matrix analysis', {
         itemsLength: analysisResult.items.length,
@@ -163,32 +152,24 @@ export class BaseAnalyzeTestMatrix {
       featureNames: matrixData.features.map(f => f.name).join(', '),
     });
 
-    // 5. 计算统计信息
     const coverageStats = {
       'happy-path': 0,
       'edge-case': 0,
       'error-path': 0,
       'state-change': 0,
-    };
+    } as const;
+
+    const coverage = { ...coverageStats } as Record<keyof typeof coverageStats, number>;
 
     for (const scenario of matrixData.scenarios) {
-      const scenarioType = scenario.scenario;
-      if (
-        scenarioType === 'happy-path' ||
-        scenarioType === 'edge-case' ||
-        scenarioType === 'error-path' ||
-        scenarioType === 'state-change'
-      ) {
-        coverageStats[scenarioType]++;
+      const scenarioType = scenario.scenario as keyof typeof coverage;
+      if (scenarioType in coverage) {
+        coverage[scenarioType]++;
       }
     }
 
-    const estimatedTests = matrixData.scenarios.reduce(
-      (sum, s) => sum + s.testCases.length,
-      0
-    );
+    const estimatedTests = matrixData.scenarios.reduce((sum, s) => sum + s.testCases.length, 0);
 
-    // 6. 构建结果
     const result: TestMatrixAnalysis = {
       matrix: {
         features: matrixData.features,
@@ -197,7 +178,7 @@ export class BaseAnalyzeTestMatrix {
           totalFeatures: matrixData.features.length,
           totalScenarios: matrixData.scenarios.length,
           estimatedTests,
-          coverage: coverageStats,
+          coverage,
         },
       },
       metadata: {
@@ -209,7 +190,6 @@ export class BaseAnalyzeTestMatrix {
       },
     };
 
-    // 7. 保存矩阵到状态
     await this.stateManager.saveTestMatrix(revisionId, result.matrix);
 
     logger.info('Test matrix analysis completed', {
