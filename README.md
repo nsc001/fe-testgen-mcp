@@ -31,6 +31,7 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 
 ### 核心架构
 - 🧠 **ReAct Agent 引擎**：支持 Thought → Action → Observation 循环
+- 🧰 **Function Calling**：自动根据工具元数据生成 OpenAI 函数定义，失败时回退到正则解析
 - 🛠️ **BaseTool 基类**：统一生命周期管理（beforeExecute, executeImpl, afterExecute, onError）
 - 📊 **Metrics 体系**：自动埋点，支持 Counter/Timer/Histogram/Gauge
 - 🗂️ **ToolRegistry**：集中管理所有工具，支持惰性加载和动态注册
@@ -46,6 +47,8 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 - `REFACTOR_SUMMARY.md` - 重构总结
 - `ARCHITECTURE_REDESIGN.md` - 架构设计文档
 - `WORKFLOW_EXAMPLES.md` - 工作流示例
+- `FUNCTION_CALLING_GUIDE.md` - Function Calling 使用指南
+- `HTTP_TRANSPORT_GUIDE.md` - HTTP Transport 使用指南
 
 ## 安装
 
@@ -213,6 +216,49 @@ EOF
 **提示**：当仓库级 Prompt 更新后，可通过 `forceRefresh: true` 参数强制重新加载。
 
 ## 使用
+
+### 运行模式
+
+#### 1. Stdio（默认）
+
+```bash
+npm start
+```
+
+- 通过 stdio 与客户端通信
+- 兼容所有支持 MCP 协议的客户端（如 Cursor）
+
+#### 2. HTTP API
+
+```bash
+# 方法 1：命令行参数
+npm start -- --transport=http
+
+# 方法 2：环境变量
+TRANSPORT_MODE=http HTTP_PORT=3000 npm start
+```
+
+**默认端点**：
+- `GET  /api/tools` - 列出可用工具
+- `POST /api/tools/call` - 调用工具（JSON 请求）
+- `GET  /api/metrics` - Prometheus 指标
+- `GET  /api/health` - 健康检查
+
+> 详细用法请参阅 [HTTP_TRANSPORT_GUIDE.md](./HTTP_TRANSPORT_GUIDE.md)
+
+#### 3. Prometheus Metrics
+
+HTTP 模式自动暴露 `/api/metrics` 端点，支持 Prometheus 抓取：
+
+```yaml
+scrape_configs:
+  - job_name: 'fe-testgen-mcp'
+    static_configs:
+      - targets: ['localhost:3000']
+    metrics_path: '/api/metrics'
+```
+
+Prometheus 指标前缀默认为 `fe_testgen_mcp_`，并自动附带 `service`、`version` 标签。
 
 ### 作为 MCP Server
 

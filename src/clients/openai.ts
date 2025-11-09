@@ -45,6 +45,8 @@ export class OpenAIClient {
       topP?: number;
       maxTokens?: number;
       responseFormat?: { type: 'json_object' | 'text' };
+      tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
+      toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
     }
   ): Promise<string> {
     try {
@@ -61,6 +63,14 @@ export class OpenAIClient {
         requestOptions.response_format = options.responseFormat;
       }
 
+      // 如果指定了 tools，添加到请求中
+      if (options?.tools && options.tools.length > 0) {
+        requestOptions.tools = options.tools;
+        if (options.toolChoice) {
+          requestOptions.tool_choice = options.toolChoice;
+        }
+      }
+
       const response = await this.client.chat.completions.create(requestOptions);
 
       const content = response.choices[0]?.message?.content;
@@ -71,6 +81,50 @@ export class OpenAIClient {
       return content;
     } catch (error) {
       logger.error('OpenAI completion failed', { error });
+      throw error;
+    }
+  }
+
+  /**
+   * 完成对话并返回完整响应（包含 tool calls）
+   */
+  async completeWithToolCalls(
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    options?: {
+      temperature?: number;
+      topP?: number;
+      maxTokens?: number;
+      tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
+      toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+    }
+  ): Promise<OpenAI.Chat.Completions.ChatCompletion.Choice> {
+    try {
+      const requestOptions: OpenAI.Chat.Completions.ChatCompletionCreateParams = {
+        model: this.config.model,
+        messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+        temperature: options?.temperature ?? this.config.temperature,
+        top_p: options?.topP ?? this.config.topP,
+        max_tokens: options?.maxTokens ?? this.config.maxTokens,
+      };
+
+      // 如果指定了 tools，添加到请求中
+      if (options?.tools && options.tools.length > 0) {
+        requestOptions.tools = options.tools;
+        if (options.toolChoice) {
+          requestOptions.tool_choice = options.toolChoice;
+        }
+      }
+
+      const response = await this.client.chat.completions.create(requestOptions);
+
+      const choice = response.choices[0];
+      if (!choice) {
+        throw new Error('Empty response from OpenAI');
+      }
+
+      return choice;
+    } catch (error) {
+      logger.error('OpenAI completion with tool calls failed', { error });
       throw error;
     }
   }

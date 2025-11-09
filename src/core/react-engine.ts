@@ -140,13 +140,52 @@ Current Step: ${context.currentStep + 1}/${context.maxSteps}
 What should I do next? Think step by step.
 `;
 
-    const response = await this.llm.complete(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      { temperature: this.config.temperature }
-    );
+    let response: string;
+
+    if (this.config.useFunctionCalling !== false) {
+      // 使用 Function Calling
+      try {
+        const tools = await this.buildToolDefinitions();
+        const choice = await this.llm.completeWithToolCalls(
+          [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          {
+            temperature: this.config.temperature,
+            tools: tools.length > 0 ? tools : undefined,
+            toolChoice: tools.length > 0 ? 'auto' : undefined,
+          }
+        );
+
+        // 如果有 tool calls，存储到上下文中以便 decide() 使用
+        if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+          context.data._pendingToolCalls = choice.message.tool_calls;
+        }
+
+        response = choice.message.content || JSON.stringify(choice.message.tool_calls);
+      } catch (error) {
+        logger.warn('[ReActEngine] Function calling failed, falling back to regex parsing', {
+          error,
+        });
+        response = await this.llm.complete(
+          [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          { temperature: this.config.temperature }
+        );
+      }
+    } else {
+      // 使用正则匹配（fallback）
+      response = await this.llm.complete(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        { temperature: this.config.temperature }
+      );
+    }
 
     return {
       content: response,
@@ -158,25 +197,71 @@ What should I do next? Think step by step.
    * Action: 从 Thought 中提取行动
    */
   private async decide(context: AgentContext, thought: Thought): Promise<Action> {
-    void context; // 当前实现未使用，可用于未来增强
-    // 简化版：解析 LLM 输出中的行动指令
-    // 生产环境应使用 function calling 或 structured output
-    const content = thought.content.toLowerCase();
+    // 优先使用 Function Calling 结果
+    if (context.data._pendingToolCalls) {
+      const toolCalls = context.data._pendingToolCalls as Array<{
+        id: string;
+        type: 'function';
+        function: { name: string; arguments: string };
+      }>;
 
-    if (content.includes('call tool:') || content.includes('use tool:')) {
-      // 提取工具名和参数（简化解析）
-      const toolMatch = content.match(/(?:call tool|use tool):\s*(\w+)/i);
+      if (toolCalls.length > 0) {
+        const toolCall = toolCalls[0];
+        let parameters: Record<string, unknown> = {};
+
+        try {
+          parameters = JSON.parse(toolCall.function.arguments);
+        } catch (error) {
+          logger.warn('[ReActEngine] Failed to parse tool call arguments', {
+            arguments: toolCall.function.arguments,
+            error,
+          });
+        }
+
+        // 清除已使用的 tool calls
+        delete context.data._pendingToolCalls;
+
+        return {
+          type: 'call_tool',
+          toolName: toolCall.function.name,
+          parameters,
+          timestamp: Date.now(),
+        };
+      }
+    }
+
+    // Fallback: 解析 LLM 输出中的行动指令（正则匹配）
+    const content = thought.content;
+    const contentLower = content.toLowerCase();
+
+    if (contentLower.includes('call tool:') || contentLower.includes('use tool:')) {
+      // 提取工具名和参数（使用原始内容进行匹配，保留大小写）
+      const toolMatch = content.match(/(?:call tool|use tool):\s*([\w-]+)/i);
       const toolName = toolMatch ? toolMatch[1] : '';
+
+      // 尝试解析参数
+      let parameters: Record<string, unknown> = {};
+      const paramsMatch = content.match(/parameters?:\s*(\{[^}]+\}|\{[\s\S]+?\})/i);
+      if (paramsMatch) {
+        try {
+          parameters = JSON.parse(paramsMatch[1]);
+        } catch (error) {
+          logger.warn('[ReActEngine] Failed to parse parameters from text', {
+            text: paramsMatch[1],
+            error,
+          });
+        }
+      }
 
       return {
         type: 'call_tool',
         toolName,
-        parameters: {}, // TODO: 解析参数
+        parameters,
         timestamp: Date.now(),
       };
     }
 
-    if (content.includes('final answer:') || content.includes('complete')) {
+    if (contentLower.includes('final answer:') || contentLower.includes('complete')) {
       return {
         type: 'terminate',
         message: thought.content,
@@ -253,6 +338,37 @@ What should I do next? Think step by step.
         return parts.join('\n');
       })
       .join('\n\n');
+  }
+
+  private async buildToolDefinitions(): Promise<
+    Array<{
+      type: 'function';
+      function: {
+        name: string;
+        description?: string;
+        parameters?: Record<string, unknown>;
+      };
+    }>
+  > {
+    const metadataList = this.toolRegistry.listMetadata();
+
+    return metadataList.map((metadata) => {
+      const parameters = metadata.inputSchema && Object.keys(metadata.inputSchema).length > 0
+        ? metadata.inputSchema
+        : {
+            type: 'object',
+            properties: {},
+          };
+
+      return {
+        type: 'function' as const,
+        function: {
+          name: metadata.name,
+          description: metadata.description,
+          parameters,
+        },
+      };
+    });
   }
 
   private generateSessionId(): string {

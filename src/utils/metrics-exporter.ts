@@ -206,29 +206,45 @@ export class MetricsUploader {
   }
 
   /**
-   * 上传到远程端点（预留接口）
+   * 上传到远程端点
    */
-  private async upload(_data: string): Promise<void> {
+  private async upload(data: string): Promise<void> {
     if (!this.config.endpoint) {
       return;
     }
 
-    // TODO: 补充实际的 HTTP 请求逻辑
-    // 参考示例：
-    // const response = await fetch(this.config.endpoint, {
-    //   method: 'POST',
-    //   headers: {
-    //     'Content-Type': 'application/json',
-    //     'Authorization': `Bearer ${this.config.apiKey}`,
-    //   },
-    //   body: _data,
-    // });
-    //
-    // if (!response.ok) {
-    //   throw new Error(`Upload failed: ${response.statusText}`);
-    // }
-    
-    logger.debug('Metrics uploaded', { endpoint: this.config.endpoint, size: _data.length });
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+
+      if (this.config.apiKey) {
+        headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+      }
+
+      const response = await fetch(this.config.endpoint, {
+        method: 'POST',
+        headers,
+        body: data,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Upload failed: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      logger.debug('Metrics uploaded successfully', {
+        endpoint: this.config.endpoint,
+        size: data.length,
+        status: response.status,
+      });
+    } catch (error) {
+      logger.error('Failed to upload metrics', {
+        endpoint: this.config.endpoint,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 }
 
