@@ -1,4 +1,4 @@
-# 项目状态 - v3.0
+# 项目状态 - v3.1
 
 ## ✅ 已完成
 
@@ -17,20 +17,42 @@
 - [x] 自动上报错误事件
 - [x] 支持环境区分（dev/test/prod）
 
+### Agent 系统增强
+- [x] 实现 AgentCoordinator 类（多 Agent 协作）
+- [x] 支持并行执行策略（p-limit 并发控制）
+- [x] 支持优先级和依赖关系管理
+- [x] 自动重试和错误恢复
+- [x] 结果合并和去重逻辑
+
+### 性能优化
+- [x] OpenAI 响应缓存（内存缓存，1 小时 TTL）
+- [x] 缓存自动清理机制
+- [x] 并发控制（p-limit，默认最大并发 3）
+- [x] Metrics 追踪缓存命中率
+
+### Agent 实现完成
+- [x] ReviewAgent - 完整实现（使用 AgentCoordinator）
+- [x] TestAgent - 完整实现（集成 TestMatrixAnalyzer）
+- [x] TestMatrixAnalyzer - 测试矩阵分析
+- [x] 4 个测试生成 Agents (HappyPath, EdgeCase, ErrorPath, StateChange)
+- [x] 7 个代码审查 Agents (React, TypeScript, Performance, Security, Accessibility, CSS, I18n)
+
 ### 依赖优化
 - [x] 移除: @modelcontextprotocol/sdk
 - [x] 移除: express, cors
 - [x] 移除: prom-client
 - [x] 移除: @types/express, @types/cors
 - [x] 新增: fastmcp (^3.22.0)
+- [x] 新增: p-limit (^5.0.0)
 
 ### 文档更新
 - [x] README.md - 反映新架构
-- [x] CHANGELOG.md - 添加 v3.0.0 版本说明
+- [x] CHANGELOG.md - 添加 v3.0.0+ 版本说明
 - [x] UPDATE_SUMMARY.md - 简洁的更新总结
 - [x] MIGRATION_V3.md - 详细迁移指南
 - [x] TRACKING_GUIDE.md - 监控配置说明
 - [x] 删除: CHANGELOG_TRACKING.md (过时)
+- [x] .project-status - 反映实际状态
 
 ### 测试验证
 - [x] 构建成功 (npm run build)
@@ -48,13 +70,29 @@
 - `GET /sse` - SSE 端点
 
 ### 核心功能
-- ✅ 11个 MCP 工具
+- ✅ 2 个核心 MCP 工具（fetch-diff, fetch-commit-changes）
 - ✅ ReAct Agent 引擎
-- ✅ 代码审查（多维度）
-- ✅ 测试生成（多场景）
+- ✅ AgentCoordinator（多 Agent 协作）
+- ✅ 代码审查系统（7 个维度，并行执行）
+- ✅ 测试生成系统（4 个场景，并行生成）
 - ✅ 监控数据上报
 - ✅ Metrics 体系
 - ✅ 缓存和状态管理
+- ✅ 响应缓存优化
+
+### 工具实现状态
+- ✅ **fetch-diff** - 从 Phabricator 获取 Diff
+- ✅ **fetch-commit-changes** - 从 Git 仓库获取 Commit 变更
+- 🚧 **review-frontend-diff** - 需要封装 ReviewAgent 为 Tool
+- 🚧 **analyze-test-matrix** - 需要封装 TestMatrixAnalyzer 为 Tool  
+- 🚧 **generate-tests** - 需要封装 TestAgent 为 Tool
+- 🚧 **publish-phabricator-comments** - 需要实现
+- 🚧 **write-test-file** - 需要实现
+- 🚧 **run-tests** - 需要实现
+- 🚧 **analyze-raw-diff-test-matrix** - 需要实现（n8n 集成）
+- 🚧 **generate-tests-from-raw-diff** - 需要实现（n8n 集成）
+
+**注意**: Agent 系统已完整实现并可通过编程方式调用，但需要将其封装为独立的 MCP 工具以供外部使用。
 
 ## 🎯 技术栈
 
@@ -65,6 +103,7 @@
 ### 核心依赖
 - fastmcp ^3.22.0
 - openai ^4.73.0
+- p-limit ^5.0.0
 - zod ^3.24.1
 - winston ^3.15.0
 
@@ -75,26 +114,64 @@
 ## 📊 项目指标
 
 ### 代码规模
-- TypeScript 文件: ~50+
-- 工具数量: 11
-- Agent 数量: 8
+- TypeScript 文件: ~60+
+- 工具数量: 2 (MCP Tools), 11 (Agents 可用)
+- Agent 数量: 12 (2 主 Agent + 10 专业 Agent)
 
 ### 依赖数量
-- 生产依赖: 8 (减少了 6 个)
-- 开发依赖: 3 (减少了 2 个)
+- 生产依赖: 8
+- 开发依赖: 3
 
-## 🔮 未来计划
+## 🔮 待完成任务
 
-### 短期
+### 高优先级（P0）
+- [ ] 将 ReviewAgent 封装为 review-frontend-diff Tool
+- [ ] 将 TestMatrixAnalyzer 封装为 analyze-test-matrix Tool
+- [ ] 将 TestAgent 封装为 generate-tests Tool
+- [ ] 实现 publish-phabricator-comments Tool
+- [ ] 实现 write-test-file Tool
+- [ ] 增加核心模块单元测试
+
+### 中优先级（P1）
+- [ ] 实现 run-tests Tool
+- [ ] 实现 n8n/GitLab 集成工具
+- [ ] 增加 Agent 单元测试
 - [ ] 监控数据可视化面板
 - [ ] 更多测试场景支持
-- [ ] 性能优化
 
-### 长期
-- [ ] Agent 协调器
-- [ ] Web UI
+### 低优先级（P2）
+- [ ] Agent 协调器增强（DAG 编排）
+- [ ] Web UI 界面
 - [ ] 部署自动化
 - [ ] 更多监控服务支持
+- [ ] 性能火焰图
+
+## 💡 架构亮点
+
+### AgentCoordinator
+- **并发控制**: 使用 p-limit 限制最大并发数（默认 3）
+- **优先级调度**: 支持任务优先级设置
+- **依赖管理**: 支持任务间依赖关系
+- **错误恢复**: 自动重试机制（最多 2 次）
+- **结果合并**: 自动去重和合并执行结果
+
+### OpenAI 响应缓存
+- **内存缓存**: 基于请求参数的 SHA256 哈希
+- **自动过期**: TTL 1 小时，定期清理
+- **Metrics 追踪**: 记录缓存命中率
+- **可配置**: 支持启用/禁用和自定义 TTL
+
+### ReviewAgent 增强
+- **并行审查**: 7 个维度同时执行
+- **智能调度**: 安全审查优先级最高
+- **容错处理**: 单个维度失败不影响其他
+- **结果过滤**: 支持最小置信度过滤
+
+### TestAgent 完整实现
+- **矩阵分析**: 自动识别功能和场景
+- **并行生成**: 4 种场景并行生成测试
+- **智能去重**: 基于测试 ID 去重
+- **数量限制**: 支持最大测试数量控制
 
 ## 📞 支持
 
@@ -104,6 +181,5 @@
 
 ---
 
-更新时间: 2024-11-09
-版本: 3.0.0
-状态: ✅ 生产就绪
+更新时间: 2024-11-09 (v3.1)
+状态: ✅ 核心就绪 / 🚧 工具封装进行中

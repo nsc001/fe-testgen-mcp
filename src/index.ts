@@ -100,10 +100,30 @@ function initialize() {
     tracking: trackingService,
   });
 
-  // 注册工具
+  // 注册所有工具
   toolRegistry = new ToolRegistry();
+  
+  // 1. 核心数据获取工具
   toolRegistry.register(new FetchDiffTool(phabricator, cache));
   toolRegistry.register(new FetchCommitChangesTool());
+  
+  // 注意：其他工具（review-frontend-diff, analyze-test-matrix, generate-tests 等）
+  // 由于依赖复杂的 Agent 系统和外部配置，需要单独实现为独立的 MCP 工具。
+  // 当前版本提供核心的 Diff 获取能力，Agent 系统可通过编程方式调用。
+  // 
+  // 待实现的工具（TODO）:
+  // - review-frontend-diff: 使用 ReviewAgent 进行代码审查
+  // - analyze-test-matrix: 使用 TestMatrixAnalyzer 分析测试矩阵
+  // - generate-tests: 使用 TestAgent 生成测试用例
+  // - publish-phabricator-comments: 发布评论到 Phabricator
+  // - write-test-file: 写入测试文件到磁盘
+  // - run-tests: 执行测试命令
+  //
+  // 这些工具的实现需要：
+  // 1. 将 Agent 逻辑封装为独立的 Tool 类（继承 BaseTool）
+  // 2. 处理复杂的依赖注入（OpenAI, Embedding, State 等）
+  // 3. 统一错误处理和响应格式
+  // 4. 完善的输入验证和输出Schema
 
   // 初始化缓存预热（异步执行，不阻塞启动）
   const warmer = initializeCacheWarmer({
