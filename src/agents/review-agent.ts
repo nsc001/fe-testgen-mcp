@@ -71,13 +71,13 @@ export class ReviewAgent {
     projectContextPrompt?: string
   ) {
     // 初始化所有审查维度
-    this.dimensions = new Map([
+    const dimensions: Array<[string, ReviewDimension]> = [
       [
         'react',
         {
           name: 'react',
           agent: new ReactAgent(llm, projectContextPrompt),
-          applicable: (files) => files.some((f) => /\.(tsx?|jsx)$/.test(f)),
+          applicable: (files: string[]) => files.some((f: string) => /\.(tsx?|jsx)$/.test(f)),
           description: 'React 最佳实践审查',
         },
       ],
@@ -86,7 +86,7 @@ export class ReviewAgent {
         {
           name: 'typescript',
           agent: new TypeScriptAgent(llm, projectContextPrompt),
-          applicable: (files) => files.some((f) => /\.tsx?$/.test(f)),
+          applicable: (files: string[]) => files.some((f: string) => /\.tsx?$/.test(f)),
           description: 'TypeScript 类型安全审查',
         },
       ],
@@ -95,7 +95,7 @@ export class ReviewAgent {
         {
           name: 'performance',
           agent: new PerformanceAgent(llm, projectContextPrompt),
-          applicable: (files) => files.some((f) => /\.(tsx?|jsx|vue)$/.test(f)),
+          applicable: (files: string[]) => files.some((f: string) => /\.(tsx?|jsx|vue)$/.test(f)),
           description: '性能优化审查',
         },
       ],
@@ -113,7 +113,7 @@ export class ReviewAgent {
         {
           name: 'accessibility',
           agent: new AccessibilityAgent(llm, projectContextPrompt),
-          applicable: (files) => files.some((f) => /\.(tsx?|jsx|vue)$/.test(f)),
+          applicable: (files: string[]) => files.some((f: string) => /\.(tsx?|jsx|vue)$/.test(f)),
           description: '可访问性审查',
         },
       ],
@@ -122,7 +122,7 @@ export class ReviewAgent {
         {
           name: 'css',
           agent: new CSSAgent(llm, projectContextPrompt),
-          applicable: (files) => files.some((f) => /\.(css|scss|less|vue)$/.test(f)),
+          applicable: (files: string[]) => files.some((f: string) => /\.(css|scss|less|vue)$/.test(f)),
           description: 'CSS 规范审查',
         },
       ],
@@ -131,11 +131,12 @@ export class ReviewAgent {
         {
           name: 'i18n',
           agent: new I18nAgent(llm, projectContextPrompt),
-          applicable: (files) => files.some((f) => /\.(tsx?|jsx|vue)$/.test(f)),
+          applicable: (files: string[]) => files.some((f: string) => /\.(tsx?|jsx|vue)$/.test(f)),
           description: '国际化审查',
         },
       ],
-    ]);
+    ];
+    this.dimensions = new Map(dimensions);
   }
 
   /**

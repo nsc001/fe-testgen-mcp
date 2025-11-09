@@ -18,7 +18,7 @@
 - ✅ **核心循环** - Thought → Action → Observation
 - ✅ **Context & Memory** - 短期上下文 + 长期记忆
 - ✅ **ContextStore** - 上下文生命周期管理
-- 🔄 **Function Calling** - 配置项已添加，实现待完成（长期优化）
+- ✅ **Function Calling** - 完整实现，支持自动回退到正则匹配
 
 ### 4. Pipeline 系统
 - ✅ **Pipeline DSL** - YAML 声明式工作流
@@ -279,7 +279,8 @@ export class CacheWarmer {
 | 并行执行 | ❌ | ❌ | ✅ |
 | 循环分支 | ❌ | ❌ | ✅ |
 | ReAct Agent | ❌ | 🔄 TestAgent | ✅ TestAgent + ReviewAgent |
-| Function Calling | ❌ | ❌ | 🔄 配置已添加 |
+| Function Calling | ❌ | ❌ | ✅ 完整实现 |
+| Metrics 上传 | ❌ | ❌ | ✅ HTTP 上传 |
 | HTTP Transport | ❌ | ❌ | 🔄 计划中 |
 | Prometheus | ❌ | ❌ | 🔄 计划中 |
 | 多 Agent 协作 | ❌ | ❌ | 🔄 计划中 |
@@ -291,9 +292,9 @@ export class CacheWarmer {
 
 ### 短期（1-2周）
 1. ✅ 完成 ReviewAgent 创建
-2. 🔄 实现 Function Calling（P1）
-3. 🔄 添加 Function Calling 单元测试
-4. 🔄 更新文档和示例
+2. ✅ 实现 Function Calling（P1）
+3. ✅ 添加 Function Calling 单元测试
+4. ✅ 更新文档和示例
 
 ### 中期（1-2月）
 5. 🔄 实现 HTTP/SSE Transport（P2）
@@ -319,9 +320,9 @@ export class CacheWarmer {
 - ✅ `WORKFLOW_EXAMPLES.md` - 工作流示例
 - ✅ `N8N_GITLAB_INTEGRATION.md` - n8n 集成文档
 - ✅ `FINAL_ARCHITECTURE_STATUS.md` - 最终架构状态（本文档）
+- ✅ `FUNCTION_CALLING_GUIDE.md` - Function Calling 使用指南
 
 ### 待补充文档
-- 🔄 `FUNCTION_CALLING_GUIDE.md` - Function Calling 使用指南
 - 🔄 `HTTP_TRANSPORT_GUIDE.md` - HTTP Transport 部署指南
 - 🔄 `MONITORING_GUIDE.md` - 监控和可观测性指南
 - 🔄 `AGENT_COORDINATION_GUIDE.md` - 多 Agent 协作指南

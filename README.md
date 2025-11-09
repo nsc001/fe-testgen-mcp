@@ -31,6 +31,7 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 
 ### 核心架构
 - 🧠 **ReAct Agent 引擎**：支持 Thought → Action → Observation 循环
+- 🧰 **Function Calling**：自动根据工具元数据生成 OpenAI 函数定义，失败时回退到正则解析
 - 🛠️ **BaseTool 基类**：统一生命周期管理（beforeExecute, executeImpl, afterExecute, onError）
 - 📊 **Metrics 体系**：自动埋点，支持 Counter/Timer/Histogram/Gauge
 - 🗂️ **ToolRegistry**：集中管理所有工具，支持惰性加载和动态注册
@@ -46,6 +47,7 @@ Frontend Phabricator Diff Review and Unit Test Generation MCP Server
 - `REFACTOR_SUMMARY.md` - 重构总结
 - `ARCHITECTURE_REDESIGN.md` - 架构设计文档
 - `WORKFLOW_EXAMPLES.md` - 工作流示例
+- `FUNCTION_CALLING_GUIDE.md` - Function Calling 使用指南
 
 ## 安装
 
