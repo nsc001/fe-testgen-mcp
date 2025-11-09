@@ -196,7 +196,7 @@ What should I do next? Think step by step.
    */
   private async act(action: Action, context: AgentContext): Promise<Observation> {
     if (action.type === 'call_tool' && action.toolName) {
-      const tool = this.toolRegistry.get(action.toolName);
+      const tool = await this.toolRegistry.get(action.toolName);
       if (!tool) {
         return {
           type: 'error',
