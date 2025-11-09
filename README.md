@@ -321,9 +321,9 @@ tracking:
 
 ### 可用工具
 
-本 MCP Server 当前提供 **2 个核心工具**，完整的 Agent 系统已实现并可通过编程方式调用。
+本 MCP Server 当前提供 **5 个核心工具**，完整的 Agent 系统已实现并封装为 MCP 工具。
 
-> 🚧 **开发状态**: Agent 系统（ReviewAgent、TestAgent 等）已完整实现，包括并发控制、响应缓存等优化。剩余工具需要封装为独立的 MCP 工具以供外部调用。详见 [.project-status](./.project-status) 了解当前进度。
+> ✅ **开发状态**: 核心 Agent 系统（ReviewAgent、TestAgent、TestMatrixAnalyzer）已完整实现并封装为 MCP 工具，包括并发控制、响应缓存等优化。详见 [.project-status](./.project-status) 了解当前进度。
 
 > ✅ **已实现核心功能**:
 > - **AgentCoordinator**: 多 Agent 协作框架，支持并行执行、优先级调度、自动重试
@@ -334,9 +334,9 @@ tracking:
 > 📋 **工具状态**:
 > - ✅ **fetch-diff** - 已实现
 > - ✅ **fetch-commit-changes** - 已实现  
-> - 🚧 **review-frontend-diff** - Agent 已实现，需封装为 Tool
-> - 🚧 **analyze-test-matrix** - Agent 已实现，需封装为 Tool
-> - 🚧 **generate-tests** - Agent 已实现，需封装为 Tool
+> - ✅ **review-frontend-diff** - 封装 ReviewAgent 的多维度代码审查工具
+> - ✅ **analyze-test-matrix** - 封装 TestMatrixAnalyzer 的测试矩阵分析工具
+> - ✅ **generate-tests** - 封装 TestAgent 的测试生成工具
 > - 🚧 **其他工具** - 待实现（publish-comments, write-file, run-tests 等）
 
 #### 1. fetch-diff
@@ -404,10 +404,12 @@ tracking:
 ```typescript
 {
   revisionId: string                 // Revision ID
-  topics?: string[]                  // 手动指定审查主题（可选）
+  dimensions?: string[]              // 手动指定审查维度（可选）
   mode?: 'incremental' | 'full'      // 增量或全量模式（默认 incremental）
   publish?: boolean                  // 是否发布评论到 Phabricator（默认 false）
   forceRefresh?: boolean             // 强制刷新缓存（默认 false）
+  minConfidence?: number             // 最小置信度阈值（默认 0.7）
+  projectRoot?: string               // 项目根目录（用于加载项目规则）
 }
 ```
 
@@ -422,9 +424,10 @@ tracking:
 - 测试建议
 
 **返回：**
-- 识别的审查主题
-- 发现的问题列表（文件、行号、描述、严重程度）
+- 实际执行的审查维度
+- 发现的问题列表（文件、行号、描述、严重程度、置信度）
 - 是否已发布到 Phabricator
+- 汇总统计（按严重程度和维度统计）
 
 **特性：**
 - ✅ 自动识别需要审查的主题
