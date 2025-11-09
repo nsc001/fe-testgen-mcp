@@ -4,6 +4,7 @@ import { ToolRegistry } from '../core/tool-registry.js';
 import { logger } from '../utils/logger.js';
 import { getMetrics } from '../utils/metrics.js';
 import { getPrometheusExporter } from '../utils/prometheus-exporter.js';
+import { getAppContext } from '../core/app-context.js';
 
 export interface HttpTransportOptions {
   port?: number;
@@ -65,19 +66,41 @@ export class HttpTransport {
         return;
       }
 
+      const startedAt = Date.now();
+
       try {
         const tool = await this.toolRegistry.get(name);
         if (!tool) {
           res.status(404).json({ error: `Tool '${name}' not found` });
+
+          const tracking = getAppContext().tracking;
+          if (tracking) {
+            void tracking.trackToolCall(name, Date.now() - startedAt, 'error', 'Tool not found');
+          }
           return;
         }
 
         getMetrics().recordCounter('http.tool.called', 1, { tool: name });
         const result = await tool.execute(args || {});
+        const duration = Date.now() - startedAt;
+
+        const tracking = getAppContext().tracking;
+        if (tracking) {
+          void tracking.trackToolCall(name, duration, 'success');
+        }
+
         res.json(result);
       } catch (error) {
         logger.error('[HttpTransport] Tool execution failed', { error });
-        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+        const duration = Date.now() - startedAt;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        const tracking = getAppContext().tracking;
+        if (tracking) {
+          void tracking.trackToolCall(name, duration, 'error', errorMessage);
+        }
+
+        res.status(500).json({ error: errorMessage });
       }
     });
 
@@ -88,6 +111,15 @@ export class HttpTransport {
         res.type('text/plain').send(metrics);
       } catch (error) {
         logger.error('[HttpTransport] Failed to export metrics', { error });
+
+        const tracking = getAppContext().tracking;
+        if (tracking) {
+          void tracking.trackError(
+            'metrics_export_failed',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+
         res.status(500).json({ error: 'Failed to export metrics' });
       }
     });

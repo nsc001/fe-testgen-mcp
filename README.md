@@ -87,6 +87,14 @@ STATE_DIR=.state       # 默认值
 
 # 安全开关
 ALLOW_PUBLISH_COMMENTS=false  # 默认值，设为 true 允许发布评论
+
+# 监控数据上报配置（可选）
+TRACKING_ENABLED=true                # 是否启用上报（默认 true）
+TRACKING_APP_ID=MCP_SERVICE          # 应用标识
+TRACKING_APP_VERSION=3.0.0           # 应用版本
+TRACKING_ENV=prod                    # 环境：dev/test/prod
+TRACKING_MEASUREMENT=mcp_service_metrics  # 指标名称
+TRACKING_METRICS_TYPE=metricsType1   # 指标类型
 ```
 
 **注意：** 不需要设置 `MCP_MODE` 或 `LOG_LEVEL`，这些是其他项目的配置。
@@ -211,7 +219,13 @@ EOF
 
 ### 运行模式
 
-#### 1. Stdio（默认）
+本项目提供两种实现版本：
+
+#### 标准版本（推荐）
+
+使用 `@modelcontextprotocol/sdk` 实现，支持精细控制。
+
+##### 1. Stdio（默认）
 
 ```bash
 npm start
@@ -220,7 +234,7 @@ npm start
 - 通过 stdio 与客户端通信
 - 兼容所有支持 MCP 协议的客户端（如 Cursor）
 
-#### 2. HTTP API
+##### 2. HTTP API
 
 ```bash
 # 方法 1：命令行参数
@@ -238,7 +252,32 @@ TRANSPORT_MODE=http HTTP_PORT=3000 npm start
 
 > 详细用法请参阅 [HTTP_TRANSPORT_GUIDE.md](./HTTP_TRANSPORT_GUIDE.md)
 
-#### 3. Prometheus Metrics
+#### FastMCP 版本（实验性）
+
+使用 `fastmcp` 库实现，提供简化的 API 和内置 HTTP Streaming 支持。
+
+```bash
+# Stdio 模式
+npm run start:fastmcp
+
+# HTTP Streaming 模式（支持 SSE）
+npm run start:fastmcp -- --transport=httpStream
+
+# 或使用环境变量
+TRANSPORT_MODE=httpStream HTTP_PORT=3000 npm run start:fastmcp
+```
+
+**FastMCP 端点**：
+- `POST http://localhost:3000/mcp` - MCP 主端点（HTTP Streaming）
+- `GET http://localhost:3000/sse` - SSE 端点（自动可用）
+
+**FastMCP 特性**：
+- ✅ 内置 HTTP Streaming / SSE 支持
+- ✅ 简化的工具注册流程
+- ✅ 自动处理连接管理
+- ✅ 相同的监控数据上报功能
+
+#### Prometheus Metrics
 
 HTTP 模式自动暴露 `/api/metrics` 端点，支持 Prometheus 抓取：
 
@@ -251,6 +290,29 @@ scrape_configs:
 ```
 
 Prometheus 指标前缀默认为 `fe_testgen_mcp_`，并自动附带 `service`、`version` 标签。
+
+#### 监控数据上报
+
+本项目支持将运行状态、工具调用情况、错误信息等实时上报到远程监控服务。
+
+**配置示例**（`config.yaml`）：
+
+```yaml
+tracking:
+  enabled: true
+  appId: MCP_SERVICE
+  appVersion: 3.0.0
+  env: prod  # dev（不上报）、test、prod
+  measurement: mcp_service_metrics
+```
+
+**自动上报事件**：
+- 🚀 服务器生命周期事件（启动、关闭）
+- 🔧 工具调用事件（耗时、状态）
+- 📊 Metrics 指标
+- ❌ 错误事件
+
+> 详细配置和使用请参阅 [TRACKING_GUIDE.md](./TRACKING_GUIDE.md)
 
 ### 作为 MCP Server
 

@@ -8,6 +8,7 @@
  */
 
 import { logger } from './logger.js';
+import type { MCPTrackingService } from './tracking-service.js';
 
 export type MetricValue = number;
 
@@ -67,7 +68,7 @@ export class InMemoryMetricsClient implements MetricsClient {
     this.records = [];
   }
 
-  private pushRecord(type: MetricSnapshot['type'], name: string, value: MetricValue, labels?: MetricLabels) {
+  protected pushRecord(type: MetricSnapshot['type'], name: string, value: MetricValue, labels?: MetricLabels) {
     const snapshot: MetricSnapshot = {
       name,
       type,
@@ -83,10 +84,56 @@ export class InMemoryMetricsClient implements MetricsClient {
   }
 }
 
+class TrackingMetricsClient extends InMemoryMetricsClient {
+  constructor(private readonly tracker: MCPTrackingService, options?: { logMetrics?: boolean }) {
+    super(options);
+  }
+
+  override recordCounter(name: string, value: MetricValue = 1, labels?: MetricLabels): void {
+    super.recordCounter(name, value, labels);
+    this.trackMetric('counter', name, value, labels);
+  }
+
+  override recordTimer(name: string, durationMs: MetricValue, labels?: MetricLabels): void {
+    super.recordTimer(name, durationMs, labels);
+    this.trackMetric('timer', name, durationMs, labels);
+  }
+
+  override recordHistogram(name: string, value: MetricValue, labels?: MetricLabels): void {
+    super.recordHistogram(name, value, labels);
+    this.trackMetric('histogram', name, value, labels);
+  }
+
+  override recordGauge(name: string, value: MetricValue, labels?: MetricLabels): void {
+    super.recordGauge(name, value, labels);
+    this.trackMetric('gauge', name, value, labels);
+  }
+
+  private trackMetric(type: MetricSnapshot['type'], name: string, value: MetricValue, labels?: MetricLabels) {
+    void this.tracker.track(
+      {
+        eventType: 'metric_recorded',
+        metricType: type,
+        metricName: name,
+        value,
+        labels: labels ?? null,
+      },
+      'INFO',
+      `metric:${name}`
+    );
+  }
+}
+
 let client: MetricsClient | undefined;
 
-export function initializeMetrics(customClient?: MetricsClient): void {
-  client = customClient ?? new InMemoryMetricsClient({ logMetrics: process.env.LOG_METRICS === 'true' });
+export function initializeMetrics(customClient?: MetricsClient, trackingService?: MCPTrackingService): void {
+  if (customClient) {
+    client = customClient;
+  } else if (trackingService) {
+    client = new TrackingMetricsClient(trackingService, { logMetrics: process.env.LOG_METRICS === 'true' });
+  } else {
+    client = new InMemoryMetricsClient({ logMetrics: process.env.LOG_METRICS === 'true' });
+  }
   logger.info('Metrics client initialized', { client: client.constructor.name });
 }
 

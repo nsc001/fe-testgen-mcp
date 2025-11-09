@@ -63,6 +63,20 @@ export function loadConfig(configPath?: string): Config {
     resolved.projectRoot = env.PROJECT_ROOT;
   }
 
+  // 监控配置使用环境变量填充
+  const trackingEnvVar = env.TRACKING_ENV as 'dev' | 'test' | 'prod' | undefined;
+  if (env.TRACKING_ENABLED || env.TRACKING_APP_ID || env.TRACKING_ENV || env.TRACKING_MEASUREMENT || env.TRACKING_METRICS_TYPE) {
+    resolved.tracking = {
+      enabled: env.TRACKING_ENABLED ? env.TRACKING_ENABLED === 'true' : undefined,
+      appId: env.TRACKING_APP_ID,
+      appVersion: env.TRACKING_APP_VERSION,
+      env: trackingEnvVar,
+      measurement: env.TRACKING_MEASUREMENT,
+      metricsType: env.TRACKING_METRICS_TYPE,
+      ...(resolved.tracking as Record<string, unknown> | undefined),
+    } as Record<string, unknown>;
+  }
+
   // 验证配置
   return configSchema.parse(resolved);
 }
