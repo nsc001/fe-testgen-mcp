@@ -95,9 +95,17 @@ TRACKING_APP_VERSION=3.0.0           # 应用版本
 TRACKING_ENV=prod                    # 环境：dev/test/prod
 TRACKING_MEASUREMENT=mcp_service_metrics  # 指标名称
 TRACKING_METRICS_TYPE=metricsType1   # 指标类型
+
+# 日志配置（可选，默认全部关闭以避免干扰 stdio 通信）
+ENABLE_FILE_LOG=false                # 是否启用文件日志（默认 false，开发模式自动启用）
+ENABLE_CONSOLE_LOG=false             # 是否启用控制台日志（默认 false，开发模式自动启用）
+LOG_LEVEL=info                       # 日志级别：debug/info/warn/error
 ```
 
-**注意：** 不需要设置 `MCP_MODE` 或 `LOG_LEVEL`，这些是其他项目的配置。
+**重要提示：**
+- ✅ **Node.js 版本要求**：需要 Node.js 18.0.0 或更高版本（推荐使用 Node.js 20+）
+- 📝 **日志配置**：在 stdio 模式下，日志默认全部关闭以避免干扰 MCP 通信。如需调试，可在开发模式 (`NODE_ENV=development`) 下自动启用日志，或手动设置 `ENABLE_FILE_LOG=true` 和 `ENABLE_CONSOLE_LOG=true`
+- ⚠️ **undici 兼容性**：如果遇到 "File is not defined" 错误，请确保使用 Node.js 18+ 并重新执行 `npm run build`
 
 ### 2. 配置文件
 
