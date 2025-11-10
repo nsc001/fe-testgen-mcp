@@ -181,7 +181,6 @@ async function main() {
       server.addTool({
         name: metadata.name,
         description: metadata.description,
-        parameters: metadata.inputSchema as any,
         execute: async (args: any) => {
           logger.info('Tool called', { tool: metadata.name });
           getMetrics().recordCounter('tool.called', 1, { tool: metadata.name });
@@ -219,6 +218,10 @@ async function main() {
 
             throw error;
           }
+        },
+        annotations: {
+          readOnlyHint: false,
+          idempotentHint: false,
         },
       });
     }
