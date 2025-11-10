@@ -256,8 +256,7 @@ async function main() {
       httpStream: {
         port: httpPort,
         host: httpHost,
-        endpoint: httpEndpoint,
-        stateless: true,
+        endpoint: httpEndpoint
       },
     });
 
