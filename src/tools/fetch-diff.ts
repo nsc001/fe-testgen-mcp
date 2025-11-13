@@ -49,7 +49,7 @@ export class FetchDiffTool extends BaseTool<FetchDiffInput, FetchDiffOutput> {
         '💡 使用场景：\n' +
         '1. 在调用其他工具前，先查看 diff 的完整信息\n' +
         '2. 了解变更的具体内容、文件路径和统计信息\n' +
-        '3. 获取 diff 对象后，可传递给其他工具（review-frontend-diff、analyze-test-matrix、generate-tests）避免重复请求\n\n' +
+        '3. 获取 diff 对象后，可传递给其他工具（analyze-test-matrix、generate-tests）避免重复请求\n\n' +
         '📤 输出信息（完整且详细）：\n' +
         '• Revision 标题和描述\n' +
         '• 文件路径列表\n' +

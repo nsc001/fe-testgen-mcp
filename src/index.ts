@@ -17,7 +17,6 @@ import { Cache } from './cache/cache.js';
 import { StateManager } from './state/manager.js';
 import { FetchDiffTool } from './tools/fetch-diff.js';
 import { FetchCommitChangesTool } from './tools/fetch-commit-changes.js';
-import { ReviewFrontendDiffTool } from './tools/review-frontend-diff.js';
 import { AnalyzeTestMatrixTool } from './tools/analyze-test-matrix.js';
 import { GenerateTestsTool } from './tools/generate-tests.js';
 import { PublishPhabricatorCommentsTool } from './tools/publish-phabricator-comments.js';
@@ -118,9 +117,6 @@ function initialize() {
   toolRegistry.register(new FetchCommitChangesTool());
 
   // 2. Agent 封装工具
-  toolRegistry.register(
-    new ReviewFrontendDiffTool(openai, embedding, state, contextStore, fetchDiffTool)
-  );
   toolRegistry.register(new AnalyzeTestMatrixTool(openai, state, fetchDiffTool));
   toolRegistry.register(
     new GenerateTestsTool(openai, embedding, state, contextStore, fetchDiffTool)

@@ -55,16 +55,6 @@ orchestrator:
   parallelAgents: true
   maxConcurrency: 5
 
-crTopics:
-  - react
-  - typescript
-  - performance
-  - accessibility
-  - security
-  - css
-  - i18n
-  - testing-suggestions
-
 testScenarios:
   - happy-path
   - edge-case
