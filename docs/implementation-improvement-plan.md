@@ -1,6 +1,12 @@
-# 实现改进方案 - 对齐文档与代码
+# 实现改进方案 - 对齐文档与代码（修订版）
 
 > 基于 `commit-branch-test-repair.md` 设计文档与当前代码库的对比分析
+> 
+> **重要澄清**：
+> - ✅ 修复指的是修复失败的测试用例（调整测试代码让其通过），而非修复源代码
+> - ✅ 主要使用场景是在 n8n 中作为 agent 节点调用
+> - ✅ 支持多 Git 项目和 Monorepo
+> - ✅ Worker 用于隔离耗时任务（分析/生成/测试执行）
 
 ## 📊 现状分析
 
@@ -11,7 +17,7 @@
 - **TestAgent**: 完整的测试生成流程（矩阵分析 + 4 种场景并行生成）
 - **工具链完整**: fetch-commit-changes → analyze-test-matrix → generate-tests → write-test-file → run-tests
 - **性能优化**: OpenAI 响应缓存、p-limit 并发控制、自动去重
-- **FastMCP 架构**: HTTP Streaming 支持，无需自定义传输层
+- **FastMCP 架构**: HTTP Streaming 支持，适合 n8n 集成
 
 ✅ **已有的外部集成**
 - **n8n/GitLab 支持**: analyze-raw-diff-test-matrix, generate-tests-from-raw-diff
@@ -19,74 +25,60 @@
 
 ### 当前实现与文档设计的差异
 
-| 模块 | 文档设计 | 当前实现 | 差距 |
-|------|---------|---------|-----|
-| **Worker 机制** | ✅ worker 线程隔离任务、测试执行 | ❌ 无 worker 机制 | **缺少** |
-| **GitLab 集成** | ✅ 自动监听 MR、创建 MR、管理分支 | ❌ 仅支持外部 raw diff | **缺少** |
-| **Workspace Manager** | ✅ Git 工作区管理、clone/fetch/checkout | ❌ 无工作区生命周期管理 | **缺少** |
-| **Task Manager** | ✅ 任务状态机、并发控制、事件广播 | ⚠️ 仅有 AgentCoordinator | **部分缺失** |
-| **Fix Agent** | ✅ 基于失败日志智能修复 | ❌ 无修复循环 | **缺少** |
-| **回归验证** | ✅ 重新执行失败测试、多轮修复 | ❌ 无验证循环 | **缺少** |
-| **GitOps** | ✅ 自动 commit/push/MR | ❌ 无自动化 | **缺少** |
-| **测试执行** | ✅ worker 隔离、依赖安装、超时控制 | ⚠️ run-tests 工具但无隔离 | **需增强** |
-| **Agent 系统** | ⚠️ 需要 Analysis/Fix/Test 三类 | ✅ TestAgent + AgentCoordinator | **已有** |
-
-### 关键发现
-
-1. **架构选择分歧**：
-   - 文档强调 "Worker + 多 Agent 协同"，理由是隔离任务、避免阻塞
-   - 当前实现基于 MCP 工具 + FastMCP，无 worker 机制
-   - **评估**：MCP 场景下，长时间任务（测试、LLM 调用）确实可能阻塞 SSE 长连接
-
-2. **GitLab 自动化缺失**：
-   - 文档设计面向 "feature 分支 → master MR" 的自动化触发场景
-   - 当前实现需要外部系统（n8n）提供 raw diff，缺少端到端 GitLab 集成
-
-3. **修复循环缺失**：
-   - 文档核心价值：测试驱动修复 + 回归验证
-   - 当前实现：生成测试 → 写入文件 → 执行测试（停止）
-   - 缺少：失败分析 → 智能修复 → 重新测试的闭环
+| 模块 | 文档设计 | 当前实现 | 实际需求 |
+|------|---------|---------|---------|
+| **Worker 机制** | 测试执行隔离 | ❌ 无 | ✅ **需要**：分析/生成/测试都需要隔离 |
+| **多项目管理** | 工作区管理 | ❌ 无 | ✅ **需要**：支持多个 Git 项目并发 |
+| **Diff 获取** | 外部输入 | ⚠️ 需要外部提供 | ✅ **可增强**：通过仓库名+分支名获取 |
+| **测试修复** | 智能修复源码 | ❌ 无 | ⚠️ **澄清**：是修复测试用例，不是源码 |
+| **任务追踪** | 持久化状态 | ❌ 无 | ⚠️ **重新评估**：n8n 场景可能不需要 |
+| **GitLab 集成** | 自动 MR | ❌ 无 | ⚠️ **可选**：n8n 可以自己处理 |
+| **Monorepo** | 基础支持 | ⚠️ 部分支持 | ✅ **需增强**：自动检测子项目 |
+| **测试工具检测** | 无明确要求 | ❌ 无 | ✅ **需要**：检测项目是否已有测试 |
 
 ---
 
-## 🎯 改进方案设计
+## 🎯 改进方案设计（重新调整）
 
 ### 设计原则
 
-1. **兼容现有架构**：保留 FastMCP + MCP 工具的基础架构
-2. **渐进式增强**：分阶段实现，每个阶段都是可用的完整功能
-3. **可选 Worker 机制**：提供 worker 模式（隔离任务），但默认使用直接调用（简单场景）
-4. **模块化设计**：新增功能作为独立模块，不破坏现有工具
+1. **面向 n8n 集成**：工具设计适合在 n8n agent 节点中调用
+2. **Worker 隔离耗时任务**：分析、生成、测试执行都可以在 worker 中进行
+3. **支持多项目并发**：可以同时处理多个 Git 项目（包括 Monorepo）
+4. **智能项目检测**：自动检测测试框架、项目结构、是否已有测试
+5. **兼容现有架构**：不破坏现有工具，渐进式增强
 
 ### 架构改进
 
 ```
 src/
-  orchestrator/              # 新增：任务编排
-    task-manager.ts          # 任务状态机、并发控制、事件广播
-    workspace-manager.ts     # Git 工作区生命周期管理
-    task-types.ts            # 任务接口定义
+  orchestrator/              # 新增：多项目管理
+    workspace-manager.ts     # Git 工作区生命周期（支持多项目）
+    project-detector.ts      # 项目检测（Monorepo、测试框架）
   
   agents/
     test-agent.ts            # 已有
     test-matrix-analyzer.ts  # 已有
-    fix-agent.ts             # 新增：智能修复
+    test-fix-agent.ts        # 新增：修复失败的测试用例
     base.ts                  # 已有
   
   workers/                   # 新增：Worker 隔离
+    analysis-worker.ts       # 分析任务 worker
+    generation-worker.ts     # 生成任务 worker
     test-runner-worker.ts    # 测试执行 worker
-    fix-worker.ts            # 修复 worker（可选，集成 Q CLI）
     worker-pool.ts           # Worker 池管理
   
   tools/
     # 已有工具保持不变
-    # 新增 GitLab 工具
-    gitlab-test-repair-start.ts   # 启动测试修复任务
-    gitlab-task-status.ts         # 查询任务状态
-    gitlab-create-mr.ts           # 创建 MR
+    # 新增增强工具
+    fetch-diff-from-repo.ts       # 通过仓库名+分支名获取 diff
+    analyze-test-matrix-worker.ts # worker 版本的分析工具
+    generate-tests-worker.ts      # worker 版本的生成工具
+    fix-failing-tests.ts          # 修复失败的测试用例
+    detect-project-config.ts      # 检测项目配置
   
   clients/
-    gitlab-client.ts         # 新增：GitLab API 客户端
+    git-client.ts            # 新增：Git 操作客户端
     openai.ts                # 已有
     embedding.ts             # 已有
   
@@ -98,507 +90,710 @@ src/
 
 ---
 
-## 📋 实现里程碑
+## 📋 实现里程碑（重新规划）
 
-### M1: 任务编排基础（优先级 P0）
+### M1: 多项目工作区管理（优先级 P0）
 
-**目标**：实现任务状态机和工作区管理，支持长时间任务追踪
+**目标**：支持多个 Git 项目并发处理，自动检测项目配置
 
 #### 交付物
 
-1. **orchestrator/task-types.ts** - 任务接口定义
+1. **orchestrator/workspace-manager.ts** - 多项目工作区管理
 ```typescript
-interface TestRepairTask {
-  id: string;
-  gitlabProjectId: string;
-  featureBranch: string;
-  baselineBranch: string;  // 默认 master
-  status: 'pending' | 'workspace-ready' | 'analyzing' | 'testing' | 'fixing' | 'completed' | 'failed';
-  progress: number;        // 0-100
-  workDir?: string;
-  result?: TestRepairResult;
-  createdAt: number;
-  updatedAt: number;
+export interface WorkspaceConfig {
+  repoUrl: string;           // Git 仓库 URL 或本地路径
+  branch: string;            // 要分析的分支
+  baselineBranch?: string;   // 对比基准分支
+  workDir?: string;          // 可选：指定工作目录（默认临时目录）
 }
 
-interface TestRepairResult {
-  testsGenerated: number;
-  testsPassed: number;
-  testsFailed: number;
-  fixAttempts: number;
-  filesChanged: string[];
-  mrUrl?: string;
-}
-```
-
-2. **orchestrator/task-manager.ts** - 任务状态管理
-```typescript
-export class TaskManager {
-  private tasks = new Map<string, TestRepairTask>();
-  private eventEmitter = new EventEmitter();
-  
-  // 创建任务
-  createTask(config: TaskConfig): string;
-  
-  // 更新任务状态
-  updateTask(taskId: string, updates: Partial<TestRepairTask>): void;
-  
-  // 查询任务
-  getTask(taskId: string): TestRepairTask | undefined;
-  
-  // 事件监听
-  on(event: 'progress' | 'status-change' | 'completed', handler: Function): void;
-  
-  // 并发控制
-  private maxConcurrent = 3;
-  private runningTasks = new Set<string>();
-}
-```
-
-3. **orchestrator/workspace-manager.ts** - Git 工作区管理
-```typescript
 export class WorkspaceManager {
-  // 创建工作区（clone + checkout）
-  async createWorkspace(config: {
-    projectId: string;
-    featureBranch: string;
-    baselineBranch: string;
-    gitlabToken: string;
-  }): Promise<string>; // 返回 workDir 路径
+  private workspaces = new Map<string, Workspace>();
   
-  // 获取变更（diff）
-  async getDiff(workDir: string, baselineBranch: string): Promise<string>;
+  // 创建工作区（支持多项目）
+  async createWorkspace(config: WorkspaceConfig): Promise<string> {
+    const workspaceId = this.generateWorkspaceId();
+    const workDir = config.workDir || `/tmp/mcp-workspace/${workspaceId}`;
+    
+    // 如果是本地路径，直接使用；否则 clone
+    if (this.isLocalPath(config.repoUrl)) {
+      await this.symlinkOrCopy(config.repoUrl, workDir);
+    } else {
+      await this.gitClone(config.repoUrl, workDir, config.branch);
+    }
+    
+    this.workspaces.set(workspaceId, {
+      id: workspaceId,
+      workDir,
+      config,
+      createdAt: Date.now(),
+    });
+    
+    return workspaceId;
+  }
+  
+  // 获取 diff
+  async getDiff(workspaceId: string): Promise<string> {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) throw new Error(`Workspace ${workspaceId} not found`);
+    
+    const baselineBranch = workspace.config.baselineBranch || 'origin/HEAD';
+    return this.gitDiff(workspace.workDir, baselineBranch);
+  }
   
   // 清理工作区
-  async cleanup(workDir: string): Promise<void>;
+  async cleanup(workspaceId: string): Promise<void> {
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) return;
+    
+    // 如果是临时目录，删除；如果是用户指定的，保留
+    if (workspace.workDir.startsWith('/tmp/mcp-workspace/')) {
+      await fs.rm(workspace.workDir, { recursive: true, force: true });
+    }
+    
+    this.workspaces.delete(workspaceId);
+  }
   
-  // Git 操作封装
-  private async gitClone(repoUrl: string, workDir: string): Promise<void>;
-  private async gitFetch(workDir: string, branch: string): Promise<void>;
-  private async gitCheckout(workDir: string, branch: string): Promise<void>;
-  private async gitCommit(workDir: string, message: string): Promise<void>;
-  private async gitPush(workDir: string, branch: string): Promise<void>;
+  // 自动清理过期工作区（超过 1 小时）
+  async cleanupExpired(): Promise<void> {
+    const now = Date.now();
+    const expired = Array.from(this.workspaces.entries())
+      .filter(([_, ws]) => now - ws.createdAt > 3600000);
+    
+    for (const [id, _] of expired) {
+      await this.cleanup(id);
+    }
+  }
 }
 ```
 
-4. **clients/gitlab-client.ts** - GitLab API 客户端
+2. **orchestrator/project-detector.ts** - 项目检测
 ```typescript
-export class GitLabClient {
-  constructor(private token: string, private baseUrl: string);
+export interface ProjectConfig {
+  projectRoot: string;       // 项目根目录
+  packageRoot?: string;      // Package 根目录（Monorepo 中的子项目）
+  isMonorepo: boolean;       // 是否是 Monorepo
+  monorepoType?: 'pnpm' | 'yarn' | 'npm' | 'lerna' | 'nx' | 'rush';
+  testFramework?: 'vitest' | 'jest' | 'none';
+  hasExistingTests: boolean; // 是否已有测试文件
+  testPattern?: string;      // 测试文件匹配模式
+  customRules?: string;      // 自定义规则内容（从 .cursor/rule/fe-mcp.md 读取）
+}
+
+export class ProjectDetector {
+  // 检测项目配置
+  async detectProject(workDir: string): Promise<ProjectConfig> {
+    const isMonorepo = await this.detectMonorepo(workDir);
+    const monorepoType = isMonorepo ? await this.detectMonorepoType(workDir) : undefined;
+    const testFramework = await this.detectTestFramework(workDir);
+    const hasExistingTests = await this.detectExistingTests(workDir);
+    const testPattern = await this.getTestPattern(workDir, testFramework);
+    const customRules = await this.loadCustomRules(workDir);
+    
+    return {
+      projectRoot: workDir,
+      isMonorepo,
+      monorepoType,
+      testFramework,
+      hasExistingTests,
+      testPattern,
+      customRules,
+    };
+  }
   
-  // 获取项目信息
-  async getProject(projectId: string): Promise<GitLabProject>;
+  // 检测 Monorepo
+  private async detectMonorepo(workDir: string): Promise<boolean> {
+    // 检查 pnpm-workspace.yaml, lerna.json, nx.json 等
+    const indicators = [
+      'pnpm-workspace.yaml',
+      'lerna.json',
+      'nx.json',
+      'rush.json',
+      'package.json' // 检查 workspaces 字段
+    ];
+    
+    for (const file of indicators) {
+      const exists = await fs.pathExists(path.join(workDir, file));
+      if (exists) {
+        // 进一步验证
+        if (file === 'package.json') {
+          const pkg = await fs.readJson(path.join(workDir, file));
+          return !!(pkg.workspaces || pkg.workspace);
+        }
+        return true;
+      }
+    }
+    
+    return false;
+  }
   
-  // 创建 MR
-  async createMergeRequest(config: {
-    projectId: string;
-    sourceBranch: string;
-    targetBranch: string;
-    title: string;
-    description: string;
-  }): Promise<{ mrUrl: string; mrId: number }>;
+  // 检测测试框架
+  private async detectTestFramework(workDir: string): Promise<'vitest' | 'jest' | 'none'> {
+    const pkgPath = path.join(workDir, 'package.json');
+    if (!await fs.pathExists(pkgPath)) return 'none';
+    
+    const pkg = await fs.readJson(pkgPath);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    
+    if (deps.vitest) return 'vitest';
+    if (deps.jest || deps['@jest/core']) return 'jest';
+    
+    return 'none';
+  }
   
-  // 添加 MR 评论
-  async addMRComment(projectId: string, mrId: number, comment: string): Promise<void>;
+  // 检测是否已有测试
+  private async detectExistingTests(workDir: string): Promise<boolean> {
+    // 查找常见测试文件
+    const testPatterns = [
+      '**/*.test.ts',
+      '**/*.test.tsx',
+      '**/*.spec.ts',
+      '**/*.spec.tsx',
+      '**/__tests__/**/*.ts',
+      '**/__tests__/**/*.tsx',
+    ];
+    
+    for (const pattern of testPatterns) {
+      const files = await glob(pattern, { cwd: workDir, ignore: ['**/node_modules/**'] });
+      if (files.length > 0) return true;
+    }
+    
+    return false;
+  }
+  
+  // 加载自定义规则
+  private async loadCustomRules(workDir: string): Promise<string | undefined> {
+    const ruleFiles = [
+      '.cursor/rule/fe-mcp.md',
+      'fe-mcp.md',
+      '.cursorrules',
+      // ... 其他已有的 rule 文件
+    ];
+    
+    for (const file of ruleFiles) {
+      const filePath = path.join(workDir, file);
+      if (await fs.pathExists(filePath)) {
+        return await fs.readFile(filePath, 'utf-8');
+      }
+    }
+    
+    return undefined;
+  }
+  
+  // 对于 Monorepo，检测变更文件所属的子项目
+  async detectSubProject(workDir: string, changedFiles: string[]): Promise<string | undefined> {
+    if (!await this.detectMonorepo(workDir)) return undefined;
+    
+    // 读取 workspace 配置
+    const workspaces = await this.getWorkspaces(workDir);
+    
+    // 找到变更文件最多的子项目
+    const subProjectCounts = new Map<string, number>();
+    for (const file of changedFiles) {
+      for (const ws of workspaces) {
+        if (file.startsWith(ws + '/')) {
+          subProjectCounts.set(ws, (subProjectCounts.get(ws) || 0) + 1);
+        }
+      }
+    }
+    
+    // 返回变更最多的子项目
+    if (subProjectCounts.size > 0) {
+      return Array.from(subProjectCounts.entries())
+        .sort((a, b) => b[1] - a[1])[0][0];
+    }
+    
+    return undefined;
+  }
+}
+```
+
+3. **clients/git-client.ts** - Git 操作客户端
+```typescript
+export class GitClient {
+  // Clone 仓库
+  async clone(repoUrl: string, targetDir: string, branch?: string): Promise<void> {
+    const args = ['clone', '--depth=1'];
+    if (branch) args.push('-b', branch);
+    args.push(repoUrl, targetDir);
+    
+    await this.execGit(args);
+  }
+  
+  // 获取 diff
+  async diff(workDir: string, baseRef: string, targetRef?: string): Promise<string> {
+    const args = ['diff', baseRef];
+    if (targetRef) args.push(targetRef);
+    
+    const result = await this.execGit(args, { cwd: workDir });
+    return result.stdout;
+  }
+  
+  // 获取变更的文件列表
+  async getChangedFiles(workDir: string, baseRef: string, targetRef?: string): Promise<string[]> {
+    const args = ['diff', '--name-only', baseRef];
+    if (targetRef) args.push(targetRef);
+    
+    const result = await this.execGit(args, { cwd: workDir });
+    return result.stdout.split('\n').filter(Boolean);
+  }
+  
+  // 检查分支是否存在
+  async branchExists(workDir: string, branch: string): Promise<boolean> {
+    try {
+      await this.execGit(['rev-parse', '--verify', branch], { cwd: workDir });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  
+  private async execGit(args: string[], options?: ExecOptions): Promise<ExecResult> {
+    // 使用 execa 或 child_process.exec
+    const { stdout, stderr } = await exec(`git ${args.join(' ')}`, options);
+    return { stdout, stderr };
+  }
+}
+```
+
+4. **tools/fetch-diff-from-repo.ts** - 通过仓库名+分支名获取 diff
+```typescript
+export interface FetchDiffFromRepoArgs {
+  repoUrl: string;           // Git 仓库 URL 或本地路径
+  branch: string;            // 要分析的分支
+  baselineBranch?: string;   // 对比基准分支（默认 origin/HEAD）
+  workDir?: string;          // 可选：指定工作目录
+}
+
+export class FetchDiffFromRepoTool extends BaseTool {
+  async executeImpl(args: FetchDiffFromRepoArgs): Promise<{
+    workspaceId: string;
+    diff: string;
+    projectConfig: ProjectConfig;
+    changedFiles: string[];
+  }> {
+    const workspaceManager = getAppContext().workspaceManager;
+    const projectDetector = getAppContext().projectDetector;
+    const gitClient = getAppContext().gitClient;
+    
+    // 1. 创建工作区
+    const workspaceId = await workspaceManager.createWorkspace({
+      repoUrl: args.repoUrl,
+      branch: args.branch,
+      baselineBranch: args.baselineBranch,
+      workDir: args.workDir,
+    });
+    
+    const workspace = workspaceManager.getWorkspace(workspaceId);
+    
+    // 2. 检测项目配置
+    const projectConfig = await projectDetector.detectProject(workspace.workDir);
+    
+    // 3. 获取 diff 和变更文件
+    const diff = await workspaceManager.getDiff(workspaceId);
+    const changedFiles = await gitClient.getChangedFiles(
+      workspace.workDir,
+      args.baselineBranch || 'origin/HEAD'
+    );
+    
+    // 4. 如果是 Monorepo，检测子项目
+    if (projectConfig.isMonorepo) {
+      const subProject = await projectDetector.detectSubProject(
+        workspace.workDir,
+        changedFiles
+      );
+      if (subProject) {
+        projectConfig.packageRoot = subProject;
+      }
+    }
+    
+    return {
+      workspaceId,
+      diff,
+      projectConfig,
+      changedFiles,
+    };
+  }
+}
+```
+
+5. **tools/detect-project-config.ts** - 检测项目配置
+```typescript
+export interface DetectProjectConfigArgs {
+  workspaceId: string;       // 已创建的工作区 ID
+}
+
+export class DetectProjectConfigTool extends BaseTool {
+  async executeImpl(args: DetectProjectConfigArgs): Promise<ProjectConfig> {
+    const workspaceManager = getAppContext().workspaceManager;
+    const projectDetector = getAppContext().projectDetector;
+    
+    const workspace = workspaceManager.getWorkspace(args.workspaceId);
+    return projectDetector.detectProject(workspace.workDir);
+  }
 }
 ```
 
 #### 验证标准
-- ✅ 可以创建任务并追踪状态
-- ✅ 可以创建 Git 工作区并获取 diff
-- ✅ 可以清理工作区
-- ✅ 任务状态持久化到内存（可选：磁盘）
+- ✅ 可以从 Git 仓库 URL 或本地路径创建工作区
+- ✅ 可以获取 diff 和变更文件列表
+- ✅ 可以自动检测 Monorepo 和测试框架
+- ✅ 可以加载自定义规则（.cursor/rule/fe-mcp.md）
+- ✅ 支持多个工作区并发存在
+- ✅ 自动清理过期工作区
 
 ---
 
 ### M2: Worker 机制（优先级 P0）
 
-**目标**：实现 worker 线程隔离，支持长时间测试执行
+**目标**：将耗时任务（分析、生成、测试）隔离到 worker 线程
 
 #### 交付物
 
 1. **workers/worker-pool.ts** - Worker 池管理
 ```typescript
-export class WorkerPool {
-  constructor(private maxWorkers: number = 3);
-  
-  // 执行任务
-  async executeTask<T>(
-    workerPath: string,
-    message: WorkerMessage
-  ): Promise<T>;
-  
-  // 终止 worker
-  async terminateWorker(workerId: string): Promise<void>;
-  
-  // 清理所有 worker
-  async cleanup(): Promise<void>;
-}
-```
-
-2. **workers/test-runner-worker.ts** - 测试执行 worker
-```typescript
-// worker 线程代码
-import { parentPort } from 'worker_threads';
-
-interface TestRunnerMessage {
-  type: 'install' | 'run';
-  workDir: string;
-  testCommand?: string;
-  testFiles?: string[];
+export interface WorkerTask<T = any> {
+  type: 'analyze' | 'generate' | 'test';
+  workspaceId: string;
+  payload: T;
   timeout?: number;
 }
 
-parentPort?.on('message', async (msg: TestRunnerMessage) => {
-  try {
-    if (msg.type === 'install') {
-      // 安装依赖
-      const result = await installDependencies(msg.workDir);
-      parentPort?.postMessage({ success: true, result });
-    } else if (msg.type === 'run') {
-      // 执行测试
-      const result = await runTests(msg.workDir, msg.testFiles, msg.timeout);
-      parentPort?.postMessage({ success: true, result });
+export class WorkerPool {
+  private workers = new Map<string, Worker>();
+  private maxWorkers: number;
+  private taskQueue: WorkerTask[] = [];
+  
+  constructor(maxWorkers: number = 3) {
+    this.maxWorkers = maxWorkers;
+  }
+  
+  // 执行任务（自动选择 worker）
+  async executeTask<TInput, TOutput>(task: WorkerTask<TInput>): Promise<TOutput> {
+    // 如果达到最大 worker 数，等待
+    while (this.workers.size >= this.maxWorkers) {
+      await this.waitForAvailableWorker();
     }
+    
+    // 选择合适的 worker 文件
+    const workerPath = this.getWorkerPath(task.type);
+    
+    // 创建 worker
+    const workerId = `${task.type}-${Date.now()}`;
+    const worker = new Worker(workerPath, {
+      workerData: { workspaceId: task.workspaceId },
+    });
+    
+    this.workers.set(workerId, worker);
+    
+    try {
+      const result = await this.runWorkerTask<TInput, TOutput>(
+        worker,
+        task.payload,
+        task.timeout
+      );
+      return result;
+    } finally {
+      // 清理 worker
+      await worker.terminate();
+      this.workers.delete(workerId);
+    }
+  }
+  
+  private async runWorkerTask<TInput, TOutput>(
+    worker: Worker,
+    payload: TInput,
+    timeout?: number
+  ): Promise<TOutput> {
+    return new Promise((resolve, reject) => {
+      const timer = timeout ? setTimeout(() => {
+        worker.terminate();
+        reject(new Error('Worker task timeout'));
+      }, timeout) : null;
+      
+      worker.on('message', (message) => {
+        if (timer) clearTimeout(timer);
+        if (message.success) {
+          resolve(message.result);
+        } else {
+          reject(new Error(message.error));
+        }
+      });
+      
+      worker.on('error', (error) => {
+        if (timer) clearTimeout(timer);
+        reject(error);
+      });
+      
+      worker.postMessage(payload);
+    });
+  }
+  
+  private getWorkerPath(type: string): string {
+    return path.join(__dirname, `${type}-worker.js`);
+  }
+  
+  async cleanup(): Promise<void> {
+    for (const [id, worker] of this.workers) {
+      await worker.terminate();
+    }
+    this.workers.clear();
+  }
+}
+```
+
+2. **workers/analysis-worker.ts** - 分析任务 worker
+```typescript
+import { parentPort, workerData } from 'worker_threads';
+
+interface AnalysisPayload {
+  diff: string;
+  projectConfig: ProjectConfig;
+}
+
+parentPort?.on('message', async (payload: AnalysisPayload) => {
+  try {
+    // 在 worker 中执行分析
+    const analyzer = new TestMatrixAnalyzer(getOpenAIClient());
+    
+    const result = await analyzer.execute({
+      diff: payload.diff,
+      files: [], // 从 diff 解析
+      framework: payload.projectConfig.testFramework,
+    });
+    
+    parentPort?.postMessage({
+      success: true,
+      result: result.items[0],
+    });
   } catch (error) {
-    parentPort?.postMessage({ success: false, error: error.message });
+    parentPort?.postMessage({
+      success: false,
+      error: error.message,
+    });
   }
 });
 ```
 
-3. **更新 run-tests.ts 工具** - 使用 worker 执行
+3. **workers/generation-worker.ts** - 生成任务 worker
 ```typescript
-export class RunTestsTool extends BaseTool {
-  async executeImpl(args: RunTestsArgs): Promise<RunTestsResult> {
+import { parentPort, workerData } from 'worker_threads';
+
+interface GenerationPayload {
+  diff: string;
+  matrix: TestMatrix;
+  projectConfig: ProjectConfig;
+  scenarios: string[];
+}
+
+parentPort?.on('message', async (payload: GenerationPayload) => {
+  try {
+    const testAgent = new TestAgent(
+      getOpenAIClient(),
+      getEmbeddingClient(),
+      getStateManager(),
+      getContextStore()
+    );
+    
+    const result = await testAgent.generateTests(
+      { raw: payload.diff } as Diff,
+      payload.matrix,
+      {
+        maxSteps: 10,
+        mode: 'incremental',
+        scenarios: payload.scenarios,
+        framework: payload.projectConfig.testFramework,
+      },
+      {} as AgentContext
+    );
+    
+    parentPort?.postMessage({
+      success: true,
+      result,
+    });
+  } catch (error) {
+    parentPort?.postMessage({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+```
+
+4. **workers/test-runner-worker.ts** - 测试执行 worker
+```typescript
+import { parentPort, workerData } from 'worker_threads';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
+
+interface TestRunnerPayload {
+  workDir: string;
+  testFiles?: string[];
+  framework: 'vitest' | 'jest';
+  timeout?: number;
+}
+
+parentPort?.on('message', async (payload: TestRunnerPayload) => {
+  try {
+    const { workDir, testFiles, framework, timeout = 60000 } = payload;
+    
+    // 构建测试命令
+    let command: string;
+    if (framework === 'vitest') {
+      command = testFiles
+        ? `vitest run ${testFiles.join(' ')}`
+        : 'vitest run';
+    } else {
+      command = testFiles
+        ? `jest ${testFiles.join(' ')}`
+        : 'jest';
+    }
+    
+    // 执行测试
+    const result = await execAsync(command, {
+      cwd: workDir,
+      timeout,
+      env: { ...process.env, CI: '1' },
+    });
+    
+    // 解析测试结果
+    const parsed = parseTestOutput(result.stdout, framework);
+    
+    parentPort?.postMessage({
+      success: true,
+      result: {
+        ...parsed,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      },
+    });
+  } catch (error) {
+    parentPort?.postMessage({
+      success: false,
+      error: error.message,
+      stdout: error.stdout,
+      stderr: error.stderr,
+    });
+  }
+});
+
+function parseTestOutput(output: string, framework: string): TestSummary {
+  // 解析测试输出，提取通过/失败/跳过数量
+  // Vitest: "Test Files  2 passed (2)"
+  // Jest: "Tests:       5 passed, 5 total"
+  
+  // ... 解析逻辑
+  
+  return {
+    total: 0,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    duration: 0,
+  };
+}
+```
+
+5. **更新工具：使用 worker 执行**
+
+```typescript
+// tools/analyze-test-matrix-worker.ts
+export class AnalyzeTestMatrixWorkerTool extends BaseTool {
+  async executeImpl(args: AnalyzeTestMatrixArgs): Promise<TestMatrix> {
     const workerPool = getAppContext().workerPool;
     
     if (workerPool) {
       // 使用 worker 执行
-      const result = await workerPool.executeTask<TestRunResult>(
-        './workers/test-runner-worker.js',
-        {
-          type: 'run',
-          workDir: args.projectRoot,
-          testFiles: args.testFiles,
-          timeout: args.timeout,
-        }
-      );
+      const result = await workerPool.executeTask<AnalysisPayload, TestMatrix>({
+        type: 'analyze',
+        workspaceId: args.workspaceId,
+        payload: {
+          diff: args.rawDiff,
+          projectConfig: args.projectConfig,
+        },
+        timeout: 120000, // 2 分钟
+      });
       return result;
     } else {
       // 回退到直接执行
-      return this.runTestsDirectly(args);
+      return this.analyzeDirectly(args);
+    }
+  }
+}
+
+// tools/generate-tests-worker.ts
+export class GenerateTestsWorkerTool extends BaseTool {
+  async executeImpl(args: GenerateTestsArgs): Promise<TestCase[]> {
+    const workerPool = getAppContext().workerPool;
+    
+    if (workerPool) {
+      const result = await workerPool.executeTask<GenerationPayload, TestCase[]>({
+        type: 'generate',
+        workspaceId: args.workspaceId,
+        payload: {
+          diff: args.rawDiff,
+          matrix: args.matrix,
+          projectConfig: args.projectConfig,
+          scenarios: args.scenarios || ['happy-path', 'edge-case'],
+        },
+        timeout: 300000, // 5 分钟
+      });
+      return result;
+    } else {
+      return this.generateDirectly(args);
+    }
+  }
+}
+
+// 更新 run-tests.ts
+export class RunTestsTool extends BaseTool {
+  async executeImpl(args: RunTestsArgs): Promise<TestRunResult> {
+    const workerPool = getAppContext().workerPool;
+    
+    if (workerPool) {
+      const result = await workerPool.executeTask<TestRunnerPayload, TestRunResult>({
+        type: 'test',
+        workspaceId: args.workspaceId,
+        payload: {
+          workDir: args.projectRoot,
+          testFiles: args.testFiles,
+          framework: args.framework || 'vitest',
+          timeout: args.timeout,
+        },
+        timeout: (args.timeout || 60000) + 5000, // worker 超时稍长于任务超时
+      });
+      return result;
+    } else {
+      return this.runDirectly(args);
     }
   }
 }
 ```
 
 #### 验证标准
-- ✅ 测试执行不阻塞主线程
-- ✅ 支持超时控制和强制终止
+- ✅ 分析、生成、测试执行都可以在 worker 中进行
+- ✅ Worker 超时自动终止
 - ✅ Worker 崩溃不影响主进程
-- ✅ 支持多个 worker 并发执行
+- ✅ 支持 3 个 worker 并发
+- ✅ 支持回退到直接执行（WORKER_ENABLED=false）
 
 ---
 
-### M3: GitLab 集成工具（优先级 P1）
+### M3: 测试用例修复（优先级 P1）
 
-**目标**：实现端到端 GitLab 自动化，支持 MR 触发和结果输出
-
-#### 交付物
-
-1. **tools/gitlab-test-repair-start.ts** - 启动测试修复任务
-```typescript
-export interface GitLabTestRepairStartArgs {
-  gitlabProjectId: string;
-  featureBranch: string;
-  baselineBranch?: string;        // 默认 master
-  gitlabToken?: string;            // 可选，优先从 env 读取
-  testCommand?: string;            // 默认 pnpm test
-  maxFixAttempts?: number;         // 默认 3
-  timeoutMs?: number;              // 默认 30 分钟
-}
-
-export class GitLabTestRepairStartTool extends BaseTool {
-  async executeImpl(args: GitLabTestRepairStartArgs): Promise<{
-    taskId: string;
-    status: string;
-    message: string;
-  }> {
-    const taskManager = getAppContext().taskManager;
-    const workspaceManager = getAppContext().workspaceManager;
-    
-    // 1. 创建任务
-    const taskId = taskManager.createTask({
-      gitlabProjectId: args.gitlabProjectId,
-      featureBranch: args.featureBranch,
-      baselineBranch: args.baselineBranch || 'master',
-    });
-    
-    // 2. 异步执行任务（不阻塞返回）
-    this.executeTaskAsync(taskId, args).catch((error) => {
-      taskManager.updateTask(taskId, { 
-        status: 'failed', 
-        error: error.message 
-      });
-    });
-    
-    return {
-      taskId,
-      status: 'pending',
-      message: `Task created. Use gitlab-task-status to check progress.`,
-    };
-  }
-  
-  private async executeTaskAsync(taskId: string, args: GitLabTestRepairStartArgs) {
-    // 详细流程见下文
-  }
-}
-```
-
-2. **tools/gitlab-task-status.ts** - 查询任务状态
-```typescript
-export interface GitLabTaskStatusArgs {
-  taskId: string;
-}
-
-export class GitLabTaskStatusTool extends BaseTool {
-  async executeImpl(args: GitLabTaskStatusArgs): Promise<TestRepairTask> {
-    const taskManager = getAppContext().taskManager;
-    const task = taskManager.getTask(args.taskId);
-    
-    if (!task) {
-      throw new Error(`Task ${args.taskId} not found`);
-    }
-    
-    return task;
-  }
-}
-```
-
-3. **tools/gitlab-create-mr.ts** - 创建 MR
-```typescript
-export interface GitLabCreateMRArgs {
-  projectId: string;
-  sourceBranch: string;
-  targetBranch: string;
-  title: string;
-  description: string;
-  gitlabToken?: string;
-}
-
-export class GitLabCreateMRTool extends BaseTool {
-  async executeImpl(args: GitLabCreateMRArgs): Promise<{
-    mrUrl: string;
-    mrId: number;
-  }> {
-    const gitlabClient = new GitLabClient(
-      args.gitlabToken || process.env.GITLAB_TOKEN!,
-      process.env.GITLAB_BASE_URL || 'https://gitlab.com'
-    );
-    
-    return gitlabClient.createMergeRequest({
-      projectId: args.projectId,
-      sourceBranch: args.sourceBranch,
-      targetBranch: args.targetBranch,
-      title: args.title,
-      description: args.description,
-    });
-  }
-}
-```
-
-#### 任务执行流程（详细）
-
-```typescript
-// 在 GitLabTestRepairStartTool.executeTaskAsync 中
-private async executeTaskAsync(taskId: string, args: GitLabTestRepairStartArgs) {
-  const taskManager = getAppContext().taskManager;
-  const workspaceManager = getAppContext().workspaceManager;
-  const state = getAppContext().state;
-  
-  try {
-    // === 阶段 A: 工作区初始化 ===
-    taskManager.updateTask(taskId, { status: 'workspace-setup', progress: 10 });
-    
-    const workDir = await workspaceManager.createWorkspace({
-      projectId: args.gitlabProjectId,
-      featureBranch: args.featureBranch,
-      baselineBranch: args.baselineBranch || 'master',
-      gitlabToken: args.gitlabToken || process.env.GITLAB_TOKEN!,
-    });
-    
-    taskManager.updateTask(taskId, { 
-      status: 'workspace-ready', 
-      workDir,
-      progress: 20 
-    });
-    
-    // === 阶段 B: 变更分析 & 测试矩阵 ===
-    taskManager.updateTask(taskId, { status: 'analyzing', progress: 30 });
-    
-    const diff = await workspaceManager.getDiff(workDir, args.baselineBranch || 'master');
-    
-    // 调用现有的 analyze-test-matrix 工具
-    const matrixTool = new AnalyzeTestMatrixTool(getAppContext().openai, state);
-    const matrixResult = await matrixTool.execute({
-      rawDiff: diff,
-      identifier: taskId,
-      projectRoot: workDir,
-    });
-    
-    if (!matrixResult.success) {
-      throw new Error('Test matrix analysis failed');
-    }
-    
-    taskManager.updateTask(taskId, { progress: 40 });
-    
-    // === 阶段 C: 测试用例生成 ===
-    taskManager.updateTask(taskId, { status: 'generating-tests', progress: 50 });
-    
-    const generateTool = new GenerateTestsTool(
-      getAppContext().openai,
-      getAppContext().embedding,
-      state,
-      getAppContext().contextStore
-    );
-    
-    const testsResult = await generateTool.execute({
-      rawDiff: diff,
-      identifier: taskId,
-      projectRoot: workDir,
-      analyzeMatrix: false, // 已经分析过了
-    });
-    
-    if (!testsResult.success) {
-      throw new Error('Test generation failed');
-    }
-    
-    const tests = testsResult.data?.tests || [];
-    taskManager.updateTask(taskId, { progress: 60 });
-    
-    // === 阶段 D: 写入测试文件 ===
-    const writeTool = new WriteTestFileTool();
-    const writeResult = await writeTool.execute({
-      tests,
-      projectRoot: workDir,
-      overwrite: false,
-    });
-    
-    taskManager.updateTask(taskId, { progress: 70 });
-    
-    // === 阶段 E: 测试执行 & 修复循环 ===
-    taskManager.updateTask(taskId, { status: 'testing', progress: 75 });
-    
-    const runTool = new RunTestsTool();
-    let testResult = await runTool.execute({
-      projectRoot: workDir,
-      testFiles: writeResult.data?.filesWritten,
-      timeout: 60000,
-    });
-    
-    let fixAttempts = 0;
-    const maxAttempts = args.maxFixAttempts || 3;
-    
-    // 修复循环
-    while (!testResult.success && fixAttempts < maxAttempts) {
-      taskManager.updateTask(taskId, { 
-        status: 'fixing', 
-        progress: 75 + (fixAttempts + 1) * 5 
-      });
-      
-      // TODO: 调用 FixAgent 进行修复
-      // const fixAgent = new FixAgent(...);
-      // const fixResult = await fixAgent.fix(testResult.data?.failures);
-      
-      // 重新执行测试
-      testResult = await runTool.execute({
-        projectRoot: workDir,
-        testFiles: writeResult.data?.filesWritten,
-        timeout: 60000,
-      });
-      
-      fixAttempts++;
-    }
-    
-    taskManager.updateTask(taskId, { progress: 90 });
-    
-    // === 阶段 F: GitOps 输出 ===
-    taskManager.updateTask(taskId, { status: 'creating-mr', progress: 95 });
-    
-    // Commit 变更
-    await workspaceManager.commit(workDir, 
-      `[${args.featureBranch}] test-driven verification\n\n` +
-      `- Generated ${tests.length} tests\n` +
-      `- Passed: ${testResult.data?.summary.passed}\n` +
-      `- Failed: ${testResult.data?.summary.failed}\n` +
-      `- Fix attempts: ${fixAttempts}`
-    );
-    
-    // Push 到远程
-    const branchName = `ai-verify/${args.featureBranch}/${Date.now()}`;
-    await workspaceManager.push(workDir, branchName);
-    
-    // 创建 MR
-    const mrTool = new GitLabCreateMRTool();
-    const mrResult = await mrTool.execute({
-      projectId: args.gitlabProjectId,
-      sourceBranch: branchName,
-      targetBranch: args.baselineBranch || 'master',
-      title: `Test verification for ${args.featureBranch}`,
-      description: this.generateMRDescription(tests, testResult, fixAttempts),
-      gitlabToken: args.gitlabToken,
-    });
-    
-    // 完成任务
-    taskManager.updateTask(taskId, { 
-      status: 'completed', 
-      progress: 100,
-      result: {
-        testsGenerated: tests.length,
-        testsPassed: testResult.data?.summary.passed || 0,
-        testsFailed: testResult.data?.summary.failed || 0,
-        fixAttempts,
-        filesChanged: writeResult.data?.filesWritten || [],
-        mrUrl: mrResult.mrUrl,
-      }
-    });
-    
-  } catch (error) {
-    logger.error(`[Task:${taskId}] Execution failed`, { error });
-    taskManager.updateTask(taskId, { 
-      status: 'failed',
-      error: error.message 
-    });
-  } finally {
-    // 清理工作区（可选保留以便调试）
-    if (process.env.CLEANUP_WORKSPACE !== 'false') {
-      await workspaceManager.cleanup(workDir);
-    }
-  }
-}
-```
-
-#### 验证标准
-- ✅ 可以通过工具触发完整的测试修复流程
-- ✅ 可以查询任务进度和结果
-- ✅ 可以自动创建 MR 并附带测试摘要
-- ✅ 支持异步执行，不阻塞 MCP 响应
-
----
-
-### M4: 智能修复（优先级 P1）
-
-**目标**：基于失败日志生成修复补丁，实现测试驱动修复闭环
+**目标**：修复失败的测试用例，而非修复源代码
 
 #### 交付物
 
-1. **agents/fix-agent.ts** - 智能修复 Agent
+1. **agents/test-fix-agent.ts** - 测试用例修复 Agent
 ```typescript
-export interface FixContext {
+export interface TestFixContext {
   failures: TestFailure[];      // 失败的测试
-  sourceFiles: string[];         // 相关源文件
-  testFiles: string[];           // 失败的测试文件
-  diff?: string;                 // 原始 diff（可选）
+  testFiles: Map<string, string>; // 测试文件内容
+  sourceFiles?: Map<string, string>; // 相关源文件（可选，用于理解预期行为）
+  projectConfig: ProjectConfig;  // 项目配置
 }
 
 export interface TestFailure {
@@ -606,207 +801,833 @@ export interface TestFailure {
   testFile: string;
   errorMessage: string;
   stackTrace: string;
-  expectedBehavior?: string;
+  actualBehavior: string;        // 实际行为
+  expectedBehavior?: string;     // 预期行为（从测试代码推断）
 }
 
-export class FixAgent extends BaseAgent<FixPatch> {
+export interface TestFix {
+  testFile: string;
+  originalCode: string;
+  fixedCode: string;
+  reason: string;                // 修复原因
+  confidence: number;            // 置信度 0-1
+}
+
+export class TestFixAgent extends BaseAgent<TestFix> {
   constructor(private llm: OpenAIClient) {
-    super('fix-agent');
+    super('test-fix-agent');
   }
   
-  async execute(context: FixContext): Promise<AgentResult<FixPatch>> {
-    // 1. 分析失败原因
-    const analysis = await this.analyzeFailures(context);
+  async execute(context: TestFixContext): Promise<AgentResult<TestFix>> {
+    const fixes: TestFix[] = [];
     
-    // 2. 生成修复建议
-    const fixes = await this.generateFixes(analysis, context);
-    
-    // 3. 应用补丁
-    const patches = await this.applyPatches(fixes);
+    for (const failure of context.failures) {
+      // 1. 分析失败原因
+      const analysis = await this.analyzeFailure(failure, context);
+      
+      // 2. 生成修复方案
+      const fix = await this.generateFix(failure, analysis, context);
+      
+      if (fix) {
+        fixes.push(fix);
+      }
+    }
     
     return {
-      items: patches,
+      items: fixes,
       summary: {
         totalFailures: context.failures.length,
-        fixesGenerated: patches.length,
-        confidence: this.calculateConfidence(patches),
+        fixesGenerated: fixes.length,
+        averageConfidence: fixes.reduce((sum, f) => sum + f.confidence, 0) / fixes.length,
       },
     };
   }
   
-  private async analyzeFailures(context: FixContext): Promise<FailureAnalysis[]> {
-    const prompt = this.buildAnalysisPrompt(context);
+  private async analyzeFailure(
+    failure: TestFailure,
+    context: TestFixContext
+  ): Promise<FailureAnalysis> {
+    const testContent = context.testFiles.get(failure.testFile);
+    
+    const prompt = `# 测试失败分析
+
+你是一个专业的测试工程师，负责分析失败的测试用例并找出原因。
+
+## 失败的测试
+
+**测试文件**: ${failure.testFile}
+**测试名称**: ${failure.testName}
+**错误信息**: ${failure.errorMessage}
+
+**测试代码**:
+\`\`\`typescript
+${testContent}
+\`\`\`
+
+**堆栈跟踪**:
+\`\`\`
+${failure.stackTrace}
+\`\`\`
+
+## 任务
+
+分析失败原因，可能的原因包括：
+1. **Mock 不正确**：Mock 的数据或行为与实际不符
+2. **断言过严**：期望值设置不合理（如精确匹配对象，但顺序可能不同）
+3. **异步处理**：缺少 await 或 waitFor
+4. **环境差异**：测试依赖特定环境（如 DOM API）
+5. **边界条件**：测试场景不完整
+6. **测试逻辑错误**：测试本身写错了
+
+## 输出格式
+
+\`\`\`json
+{
+  "reason": "断言过严：期望对象顺序完全匹配，但实际返回顺序可能不同",
+  "category": "assertion",
+  "suggestedFix": "使用 toContainEqual 或 toMatchObject 代替 toEqual",
+  "confidence": 0.9
+}
+\`\`\`
+`;
+    
     const response = await this.llm.chatCompletion({
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
     });
-    // 解析分析结果
-    return this.parseAnalysisResponse(response);
+    
+    return JSON.parse(this.extractJSON(response.choices[0].message.content));
   }
   
-  private async generateFixes(
-    analysis: FailureAnalysis[],
-    context: FixContext
-  ): Promise<FixSuggestion[]> {
-    const prompt = this.buildFixPrompt(analysis, context);
+  private async generateFix(
+    failure: TestFailure,
+    analysis: FailureAnalysis,
+    context: TestFixContext
+  ): Promise<TestFix | null> {
+    const testContent = context.testFiles.get(failure.testFile);
+    
+    const prompt = `# 测试用例修复
+
+基于失败分析，生成修复后的测试代码。
+
+## 失败分析
+
+${JSON.stringify(analysis, null, 2)}
+
+## 原始测试代码
+
+\`\`\`typescript
+${testContent}
+\`\`\`
+
+## 要求
+
+1. **只修复测试代码**，不修改源代码
+2. **最小化修改**：只改动必要的部分
+3. **保持测试意图**：不改变测试要验证的核心功能
+4. **提高鲁棒性**：让测试更稳定
+
+常见修复方法：
+- Mock 不正确 → 调整 mock 数据/行为
+- 断言过严 → 使用更灵活的匹配器（toContainEqual, toMatchObject）
+- 异步处理 → 添加 await, waitFor
+- 环境差异 → 添加 polyfill 或 skip
+- 边界条件 → 添加额外的测试场景
+- 测试逻辑错误 → 修正测试逻辑
+
+## 输出格式
+
+\`\`\`json
+{
+  "fixedCode": "... 完整的修复后代码 ...",
+  "reason": "将 toEqual 改为 toContainEqual，允许数组元素顺序不同",
+  "confidence": 0.9,
+  "changes": [
+    "第 15 行：expect(result).toEqual([...]) → expect(result).toContainEqual(...)"
+  ]
+}
+\`\`\`
+`;
+    
     const response = await this.llm.chatCompletion({
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
     });
-    return this.parseFixResponse(response);
+    
+    const parsed = JSON.parse(this.extractJSON(response.choices[0].message.content));
+    
+    return {
+      testFile: failure.testFile,
+      originalCode: testContent || '',
+      fixedCode: parsed.fixedCode,
+      reason: parsed.reason,
+      confidence: parsed.confidence,
+    };
   }
 }
 ```
 
-2. **更新 GitLabTestRepairStartTool** - 集成 FixAgent
+2. **tools/fix-failing-tests.ts** - 修复失败测试的工具
 ```typescript
-// 在测试执行循环中添加修复逻辑
-while (!testResult.success && fixAttempts < maxAttempts) {
-  const failures = this.parseTestFailures(testResult);
-  
-  const fixAgent = new FixAgent(getAppContext().openai);
-  const fixResult = await fixAgent.execute({
-    failures,
-    sourceFiles: this.getRelatedSourceFiles(failures, workDir),
-    testFiles: writeResult.data?.filesWritten || [],
-  });
-  
-  if (fixResult.items.length > 0) {
-    // 应用补丁
-    for (const patch of fixResult.items) {
-      await this.applyPatch(workDir, patch);
+export interface FixFailingTestsArgs {
+  workspaceId: string;
+  testResults: TestRunResult;    // 包含失败信息的测试结果
+  maxAttempts?: number;          // 最大修复尝试次数（默认 3）
+}
+
+export interface FixFailingTestsResult {
+  success: boolean;
+  fixes: TestFix[];
+  retriedResults?: TestRunResult; // 修复后重新运行的结果
+  attempts: number;
+}
+
+export class FixFailingTestsTool extends BaseTool {
+  async executeImpl(args: FixFailingTestsArgs): Promise<FixFailingTestsResult> {
+    const workspaceManager = getAppContext().workspaceManager;
+    const workspace = workspaceManager.getWorkspace(args.workspaceId);
+    
+    let currentResults = args.testResults;
+    let attempts = 0;
+    const maxAttempts = args.maxAttempts || 3;
+    const allFixes: TestFix[] = [];
+    
+    while (currentResults.summary.failed > 0 && attempts < maxAttempts) {
+      attempts++;
+      
+      // 1. 提取失败的测试
+      const failures = this.extractFailures(currentResults);
+      
+      // 2. 读取测试文件内容
+      const testFiles = await this.readTestFiles(workspace.workDir, failures);
+      
+      // 3. 调用 TestFixAgent 生成修复
+      const fixAgent = new TestFixAgent(getAppContext().openai);
+      const fixResult = await fixAgent.execute({
+        failures,
+        testFiles,
+        projectConfig: workspace.projectConfig,
+      });
+      
+      if (fixResult.items.length === 0) {
+        // 无法生成修复，停止
+        break;
+      }
+      
+      allFixes.push(...fixResult.items);
+      
+      // 4. 应用修复
+      await this.applyFixes(workspace.workDir, fixResult.items);
+      
+      // 5. 重新运行测试
+      const runTool = new RunTestsTool();
+      currentResults = await runTool.execute({
+        workspaceId: args.workspaceId,
+        projectRoot: workspace.workDir,
+        testFiles: failures.map(f => f.testFile),
+      });
+      
+      // 如果全部通过，退出循环
+      if (currentResults.summary.failed === 0) {
+        break;
+      }
     }
     
-    // 重新执行测试
-    testResult = await runTool.execute({
-      projectRoot: workDir,
-      testFiles: writeResult.data?.filesWritten,
-      timeout: 60000,
-    });
+    return {
+      success: currentResults.summary.failed === 0,
+      fixes: allFixes,
+      retriedResults: currentResults,
+      attempts,
+    };
   }
   
-  fixAttempts++;
+  private extractFailures(results: TestRunResult): TestFailure[] {
+    // 从测试结果中提取失败信息
+    // 解析 stdout/stderr，提取测试名称、错误信息、堆栈
+    
+    const failures: TestFailure[] = [];
+    
+    // Vitest 格式: "FAIL  src/components/Button.spec.ts"
+    // Jest 格式: "FAIL  src/components/Button.test.ts"
+    
+    // ... 解析逻辑 ...
+    
+    return failures;
+  }
+  
+  private async readTestFiles(
+    workDir: string,
+    failures: TestFailure[]
+  ): Promise<Map<string, string>> {
+    const testFiles = new Map<string, string>();
+    
+    for (const failure of failures) {
+      const filePath = path.join(workDir, failure.testFile);
+      const content = await fs.readFile(filePath, 'utf-8');
+      testFiles.set(failure.testFile, content);
+    }
+    
+    return testFiles;
+  }
+  
+  private async applyFixes(workDir: string, fixes: TestFix[]): Promise<void> {
+    for (const fix of fixes) {
+      const filePath = path.join(workDir, fix.testFile);
+      await fs.writeFile(filePath, fix.fixedCode, 'utf-8');
+    }
+  }
 }
 ```
 
-3. **Prompt 模板** - prompts/fix-agent.md
+3. **Prompt 模板** - prompts/test-fix-agent.md
 ```markdown
-# 测试失败修复
+# 测试用例修复指南
 
-你是一个专业的代码修复 Agent，负责分析测试失败原因并生成修复补丁。
+## 核心原则
 
-## 输入
+1. **只修复测试代码，不修改源代码**
+2. **最小化修改**：只改动必要的部分
+3. **保持测试意图**：不改变测试要验证的核心功能
+4. **提高鲁棒性**：让测试更稳定、更可靠
 
-### 失败的测试
-{failures}
+## 常见失败场景与修复方法
 
-### 相关源文件
-{sourceFiles}
+### 1. Mock 不正确
 
-### 测试文件
-{testFiles}
+**问题**：Mock 的数据或行为与实际不符
 
-## 任务
+**修复**：
+- 调整 mock 返回值的结构
+- 修正 mock 函数的行为
+- 添加缺失的 mock
 
-1. **分析失败原因**：
-   - 理解测试的预期行为
-   - 定位失败的具体原因（逻辑错误、边界条件、状态问题等）
-   - 识别需要修复的源文件
+**示例**：
+```typescript
+// 修复前
+vi.mock('./api', () => ({
+  fetchUser: vi.fn().mockResolvedValue({ name: 'test' })
+}))
 
-2. **生成修复方案**：
-   - 提供最小化的修复补丁（diff 格式）
-   - 确保修复不影响其他测试
-   - 优先修复源代码，必要时修复测试代码
+// 修复后（补充缺失字段）
+vi.mock('./api', () => ({
+  fetchUser: vi.fn().mockResolvedValue({ 
+    id: 1, 
+    name: 'test', 
+    email: 'test@example.com' 
+  })
+}))
+```
 
-3. **置信度评估**：
-   - 对每个修复方案给出置信度（0-1）
-   - 解释修复的理由
+### 2. 断言过严
+
+**问题**：期望值设置不合理（如精确匹配对象，但顺序可能不同）
+
+**修复**：
+- `toEqual` → `toMatchObject`（部分匹配）
+- `toEqual([...])` → `toContainEqual(...)`（数组包含）
+- `toBe` → `toBeCloseTo`（浮点数）
+
+**示例**：
+```typescript
+// 修复前
+expect(result).toEqual([{ id: 1 }, { id: 2 }])
+
+// 修复后（允许顺序不同）
+expect(result).toContainEqual({ id: 1 })
+expect(result).toContainEqual({ id: 2 })
+```
+
+### 3. 异步处理
+
+**问题**：缺少 await 或 waitFor
+
+**修复**：
+- 添加 await
+- 使用 waitFor 等待异步更新
+- 使用 findBy* 替代 getBy*
+
+**示例**：
+```typescript
+// 修复前
+it('should display user', () => {
+  render(<UserProfile userId={1} />)
+  expect(screen.getByText('John')).toBeInTheDocument()
+})
+
+// 修复后
+it('should display user', async () => {
+  render(<UserProfile userId={1} />)
+  expect(await screen.findByText('John')).toBeInTheDocument()
+})
+```
+
+### 4. 环境差异
+
+**问题**：测试依赖特定环境（如 DOM API、window 对象）
+
+**修复**：
+- 添加环境检查
+- 使用 polyfill
+- 在不支持的环境中 skip
+
+**示例**：
+```typescript
+// 修复前
+it('should copy to clipboard', () => {
+  navigator.clipboard.writeText('test')
+  // ...
+})
+
+// 修复后
+it('should copy to clipboard', () => {
+  if (!navigator.clipboard) {
+    // Mock clipboard API
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    })
+  }
+  navigator.clipboard.writeText('test')
+  // ...
+})
+```
+
+### 5. 边界条件
+
+**问题**：测试场景不完整
+
+**修复**：
+- 添加边界值测试
+- 添加空值/null/undefined 测试
+- 添加错误场景测试
+
+### 6. 测试逻辑错误
+
+**问题**：测试本身写错了
+
+**修复**：
+- 修正测试步骤
+- 修正期望值
+- 修正测试数据
 
 ## 输出格式
 
 ```json
 {
-  "fixes": [
-    {
-      "file": "src/components/Button.tsx",
-      "patch": "--- a/src/components/Button.tsx\n+++ b/src/components/Button.tsx\n...",
-      "reason": "修复按钮点击事件未绑定的问题",
-      "confidence": 0.9
-    }
-  ]
+  "fixedCode": "... 完整的修复后代码 ...",
+  "reason": "修复原因",
+  "confidence": 0.9,
+  "changes": ["具体改动列表"]
 }
 ```
 ```
 
 #### 验证标准
-- ✅ 可以基于失败日志生成修复建议
-- ✅ 可以自动应用补丁
-- ✅ 修复后重新执行测试
-- ✅ 支持多轮修复（最多 N 次）
+- ✅ 可以分析失败的测试用例
+- ✅ 可以生成修复后的测试代码
+- ✅ 修复后重新运行测试
+- ✅ 支持多轮修复（最多 3 次）
+- ✅ 置信度评估准确
 
 ---
 
-### M5: 增强与优化（优先级 P2）
+### M4: n8n 集成增强（优先级 P1）
 
-**目标**：完善配置、监控、文档和安全性
+**目标**：优化 n8n agent 节点调用体验
 
-#### 交付物
+#### n8n 工作流示例
 
-1. **配置增强** - 新增环境变量
-```bash
-# GitLab 配置
-GITLAB_TOKEN=glpat-xxx
-GITLAB_BASE_URL=https://gitlab.com
-
-# 任务配置
-TASK_MAX_CONCURRENT=3                  # 最大并发任务数
-TASK_TIMEOUT_MS=1800000                # 30 分钟超时
-TASK_CLEANUP_WORKSPACE=true            # 完成后清理工作区
-TASK_TEST_INSTALL_TIMEOUT=300000       # 依赖安装超时 5 分钟
-
-# Worker 配置
-WORKER_ENABLED=true                    # 启用 worker 模式
-WORKER_MAX_POOL=3                      # worker 池大小
-WORKER_TIMEOUT_MS=600000               # worker 超时 10 分钟
-
-# 修复配置
-FIX_MAX_ATTEMPTS=3                     # 最大修复尝试次数
-FIX_AGENT_MODEL=gpt-4                  # 修复使用的模型
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   n8n Workflow: Test Generation             │
+├─────────────────────────────────────────────────────────────┤
+│                                                               │
+│  1. Trigger: GitLab Webhook (MR created/updated)            │
+│      ↓                                                        │
+│  2. Extract: repoUrl, branch, baselineBranch                │
+│      ↓                                                        │
+│  3. MCP Agent: fetch-diff-from-repo                         │
+│      Input: { repoUrl, branch, baselineBranch }             │
+│      Output: { workspaceId, diff, projectConfig }           │
+│      ↓                                                        │
+│  4. MCP Agent: analyze-test-matrix-worker                   │
+│      Input: { workspaceId, diff, projectConfig }            │
+│      Output: { matrix }                                      │
+│      ↓                                                        │
+│  5. MCP Agent: generate-tests-worker                        │
+│      Input: { workspaceId, matrix, scenarios }              │
+│      Output: { tests }                                       │
+│      ↓                                                        │
+│  6. MCP Agent: write-test-file                              │
+│      Input: { workspaceId, tests }                          │
+│      Output: { filesWritten }                               │
+│      ↓                                                        │
+│  7. MCP Agent: run-tests                                    │
+│      Input: { workspaceId, testFiles }                      │
+│      Output: { testResults }                                │
+│      ↓                                                        │
+│  8. If (testResults.failed > 0):                            │
+│      MCP Agent: fix-failing-tests                           │
+│      Input: { workspaceId, testResults, maxAttempts: 3 }    │
+│      Output: { fixes, retriedResults }                      │
+│      ↓                                                        │
+│  9. Notification: Send results to Slack/Email               │
+│                                                               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-2. **监控增强** - 扩展 Metrics
+#### 简化版（一键式）
+
 ```typescript
-// 新增指标
-getMetrics().recordCounter('task.created', 1, { projectId });
-getMetrics().recordCounter('task.completed', 1, { status, duration });
-getMetrics().recordHistogram('task.duration', duration, { status });
-getMetrics().recordGauge('task.running', runningCount);
-getMetrics().recordCounter('fix.attempt', 1, { success });
+// tools/test-generation-workflow.ts
+export interface TestGenerationWorkflowArgs {
+  repoUrl: string;
+  branch: string;
+  baselineBranch?: string;
+  scenarios?: string[];
+  autoFix?: boolean;         // 是否自动修复失败的测试
+  maxFixAttempts?: number;
+}
+
+export class TestGenerationWorkflowTool extends BaseTool {
+  async executeImpl(args: TestGenerationWorkflowArgs): Promise<{
+    workspaceId: string;
+    projectConfig: ProjectConfig;
+    matrix: TestMatrix;
+    tests: TestCase[];
+    filesWritten: string[];
+    testResults: TestRunResult;
+    fixes?: TestFix[];
+  }> {
+    // 一键式流程，内部调用所有步骤
+    
+    // 1. 获取 diff
+    const fetchTool = new FetchDiffFromRepoTool();
+    const fetchResult = await fetchTool.execute({ ... });
+    
+    // 2. 分析矩阵
+    const analyzeTool = new AnalyzeTestMatrixWorkerTool();
+    const matrix = await analyzeTool.execute({ ... });
+    
+    // 3. 生成测试
+    const generateTool = new GenerateTestsWorkerTool();
+    const tests = await generateTool.execute({ ... });
+    
+    // 4. 写入文件
+    const writeTool = new WriteTestFileTool();
+    const writeResult = await writeTool.execute({ ... });
+    
+    // 5. 运行测试
+    const runTool = new RunTestsTool();
+    const testResults = await runTool.execute({ ... });
+    
+    // 6. (可选) 修复失败的测试
+    let fixes;
+    if (args.autoFix && testResults.summary.failed > 0) {
+      const fixTool = new FixFailingTestsTool();
+      const fixResult = await fixTool.execute({ ... });
+      fixes = fixResult.fixes;
+    }
+    
+    return { ... };
+  }
+}
 ```
-
-3. **文档更新**
-- README.md - 添加 GitLab 集成使用指南
-- docs/gitlab-integration.md - GitLab 工作流详细说明
-- docs/fix-agent-guide.md - 修复 Agent 使用指南
-
-4. **安全加固**
-- Worker 环境变量隔离（仅注入必要的 token）
-- 工作区路径校验（防止路径遍历）
-- Git 操作超时和重试机制
-- 敏感信息脱敏（日志中的 token）
-
-5. **测试覆盖**
-- workspace-manager 单元测试
-- task-manager 单元测试
-- worker-pool 单元测试
-- GitLab 工具集成测试
 
 #### 验证标准
-- ✅ 所有配置可通过环境变量或配置文件设置
-- ✅ 监控指标完整记录任务生命周期
-- ✅ 文档清晰，有完整示例
-- ✅ 安全问题已识别并修复
-- ✅ 核心模块测试覆盖率 > 80%
+- ✅ 可以在 n8n 中逐步调用各个工具
+- ✅ 提供一键式工具简化流程
+- ✅ 每个步骤返回 workspaceId，便于串联
+- ✅ 支持自动修复选项
+
+---
+
+### M5: 配置文件增强（优先级 P2）
+
+**目标**：补充 `.cursor/rule/fe-mcp.md` 推荐配置
+
+#### 推荐配置模板
+
+创建 `docs/cursor-rule-template.md` 作为项目配置模板：
+
+```markdown
+# FE MCP 测试生成配置
+
+> 本文件用于配置 fe-testgen-mcp 的测试生成行为
+> 
+> **路径**: `.cursor/rule/fe-mcp.md`
+> 
+> **优先级**: 项目级配置 > 全局配置
+
+## 项目信息
+
+- **项目名称**: [Your Project Name]
+- **项目类型**: [React / Vue / Angular / Pure TypeScript]
+- **测试框架**: [Vitest / Jest]
+- **是否 Monorepo**: [是 / 否]
+
+## 测试配置
+
+### 测试框架
+
+```yaml
+testFramework: vitest
+testPattern: "**/*.{test,spec}.{ts,tsx}"
+testDirectory: "__tests__"
+```
+
+### 测试风格
+
+```yaml
+# 测试描述语言
+descriptionLanguage: zh-CN  # zh-CN / en-US
+
+# 测试场景优先级
+scenarioPriority:
+  - happy-path
+  - edge-case
+  - error-path
+  - state-change
+
+# 最大生成测试数
+maxTestsPerFile: 10
+```
+
+## 代码规范
+
+### React 组件
+
+- 必须使用函数式组件 + Hooks
+- 所有组件需要 TypeScript 类型定义
+- Props 使用 interface 定义
+
+### 测试规范
+
+```typescript
+// ✅ 推荐
+describe('Button', () => {
+  it('should render correctly', () => {
+    // ...
+  })
+  
+  it('should handle click event', async () => {
+    // ...
+  })
+})
+
+// ❌ 避免
+test('button', () => {
+  // 测试描述不清晰
+})
+```
+
+### Mock 规范
+
+```typescript
+// ✅ 推荐：使用 vi.mock
+vi.mock('./api', () => ({
+  fetchUser: vi.fn().mockResolvedValue({ id: 1, name: 'test' })
+}))
+
+// ❌ 避免：使用 jest.mock（如果使用 Vitest）
+jest.mock('./api', ...)
+```
+
+### 断言规范
+
+```typescript
+// ✅ 推荐：使用语义化的匹配器
+expect(user).toMatchObject({ name: 'test' })
+expect(items).toContainEqual({ id: 1 })
+expect(count).toBeGreaterThan(0)
+
+// ❌ 避免：过于严格的匹配
+expect(user).toEqual({ id: 1, name: 'test', createdAt: expect.any(Date) })
+```
+
+## Monorepo 配置
+
+如果是 Monorepo 项目，请在子项目中创建独立配置：
+
+```
+monorepo-root/
+├── .cursor/rule/fe-mcp.md      # 全局配置
+├── packages/
+│   ├── ui-components/
+│   │   └── .cursor/rule/fe-mcp.md  # UI 组件库配置
+│   └── business-logic/
+│       └── .cursor/rule/fe-mcp.md  # 业务逻辑配置
+```
+
+## 排除规则
+
+不生成测试的文件/目录：
+
+```yaml
+exclude:
+  - "**/*.d.ts"
+  - "**/*.stories.tsx"
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/.next/**"
+  - "**/coverage/**"
+```
+
+## 已有测试处理
+
+- **策略**: 增量生成（只为没有测试的文件生成）
+- **覆盖**: 不覆盖已有测试文件
+- **合并**: 如果文件有部分测试，生成补充测试
+
+## 自定义 Prompt
+
+### 生成测试前
+
+```
+在生成测试前，请确保：
+1. 理解组件的业务逻辑和用户交互
+2. 识别关键的状态变化和副作用
+3. 考虑边界条件和错误场景
+```
+
+### 生成测试时
+
+```
+生成测试时，请遵循：
+1. 测试描述清晰，使用中文
+2. 每个测试只验证一个功能点
+3. 使用 async/await 处理异步操作
+4. Mock 外部依赖（API、localStorage 等）
+```
+
+### 生成测试后
+
+```
+生成测试后，请检查：
+1. 所有测试都有清晰的描述
+2. 所有断言都有意义
+3. 没有重复的测试场景
+4. 测试覆盖了主要功能
+```
+
+## 项目特定规则
+
+### 状态管理
+
+我们使用 Zustand 进行全局状态管理：
+
+```typescript
+// 测试 Zustand store
+import { renderHook, act } from '@testing-library/react'
+import { useStore } from './store'
+
+it('should update state', () => {
+  const { result } = renderHook(() => useStore())
+  
+  act(() => {
+    result.current.increment()
+  })
+  
+  expect(result.current.count).toBe(1)
+})
+```
+
+### API 请求
+
+我们使用 Axios 进行 API 请求：
+
+```typescript
+// Mock Axios
+vi.mock('axios')
+const mockedAxios = axios as jest.Mocked<typeof axios>
+
+it('should fetch data', async () => {
+  mockedAxios.get.mockResolvedValue({ data: { ... } })
+  // ...
+})
+```
+
+### 路由
+
+我们使用 React Router v6：
+
+```typescript
+// 测试路由
+import { MemoryRouter } from 'react-router-dom'
+
+it('should navigate to detail page', () => {
+  render(
+    <MemoryRouter initialEntries={['/']}>
+      <App />
+    </MemoryRouter>
+  )
+  // ...
+})
+```
+
+## 参考示例
+
+查看 `src/__tests__/example.test.ts` 了解推荐的测试风格。
+
+---
+
+**更新时间**: 2024-11-15
+**版本**: 1.0
+```
+
+#### 自动生成配置工具
+
+```typescript
+// tools/generate-cursor-rule.ts
+export interface GenerateCursorRuleArgs {
+  workspaceId: string;
+  outputPath?: string;  // 默认 .cursor/rule/fe-mcp.md
+}
+
+export class GenerateCursorRuleTool extends BaseTool {
+  async executeImpl(args: GenerateCursorRuleArgs): Promise<{
+    filePath: string;
+    content: string;
+  }> {
+    const workspaceManager = getAppContext().workspaceManager;
+    const projectDetector = getAppContext().projectDetector;
+    
+    const workspace = workspaceManager.getWorkspace(args.workspaceId);
+    const projectConfig = await projectDetector.detectProject(workspace.workDir);
+    
+    // 基于项目配置生成推荐的 cursor rule
+    const template = await this.loadTemplate();
+    const content = this.fillTemplate(template, projectConfig);
+    
+    // 写入文件
+    const outputPath = args.outputPath || '.cursor/rule/fe-mcp.md';
+    const fullPath = path.join(workspace.workDir, outputPath);
+    await fs.ensureDir(path.dirname(fullPath));
+    await fs.writeFile(fullPath, content, 'utf-8');
+    
+    return {
+      filePath: outputPath,
+      content,
+    };
+  }
+  
+  private fillTemplate(template: string, config: ProjectConfig): string {
+    // 替换模板中的占位符
+    return template
+      .replace('[Your Project Name]', path.basename(config.projectRoot))
+      .replace('[Vitest / Jest]', config.testFramework || 'vitest')
+      .replace('[是 / 否]', config.isMonorepo ? '是' : '否')
+      // ... 其他替换
+  }
+}
+```
+
+#### 验证标准
+- ✅ 提供完整的配置模板
+- ✅ 可以自动生成项目配置
+- ✅ 配置文件包含所有推荐规则
+- ✅ 支持 Monorepo 子项目配置
 
 ---
 
@@ -814,122 +1635,135 @@ getMetrics().recordCounter('fix.attempt', 1, { success });
 
 ### 开发顺序
 
-```mermaid
-graph TD
-    A[M1: 任务编排基础] --> B[M2: Worker 机制]
-    B --> C[M3: GitLab 集成工具]
-    C --> D[M4: 智能修复]
-    D --> E[M5: 增强与优化]
-    
-    A --> F[可独立使用：手动任务管理]
-    B --> G[可独立使用：隔离测试执行]
-    C --> H[可独立使用：GitLab 自动化]
-    D --> I[完整功能：测试驱动修复]
-    E --> J[生产就绪]
+```
+M1 (多项目工作区) → M2 (Worker 隔离) → M3 (测试修复) → M4 (n8n 增强) → M5 (配置)
+    ↓                    ↓                  ↓                ↓                ↓
+  可用于基础         可用于高并发       可用于自动化     可用于生产      完全就绪
+  场景测试           场景测试           测试修复         集成           
 ```
 
 ### 兼容性保证
 
 1. **现有工具不受影响**：
-   - fetch-commit-changes, analyze-test-matrix, generate-tests 等工具保持不变
-   - 新增工具作为独立模块，不破坏现有调用方式
+   - 所有已有工具保持不变
+   - 新增工具作为独立模块
 
 2. **渐进式启用**：
-   - Worker 机制默认禁用，通过 `WORKER_ENABLED=true` 启用
-   - GitLab 工具需要配置 `GITLAB_TOKEN` 才可用
-   - Fix Agent 可选，不影响基础测试生成流程
+   - Worker 默认启用（`WORKER_ENABLED=true`）
+   - 如果 worker 失败，自动回退到直接执行
+   - 可以通过环境变量禁用 worker
 
-3. **向后兼容**：
-   - 所有新增的环境变量都有合理的默认值
-   - 现有工具输出格式不变
+3. **n8n 兼容性**：
+   - 每个工具可以独立调用
+   - 也提供一键式工具简化流程
+   - workspaceId 贯穿整个流程
 
 ### 里程碑检查点
 
-| 里程碑 | 预估工时 | 验证方式 | 阻塞关系 |
-|--------|---------|---------|---------|
-| M1 | 2-3 天 | 单元测试 + 手动测试 | 无 |
-| M2 | 2-3 天 | Worker 隔离验证 | 依赖 M1 |
-| M3 | 3-4 天 | GitLab 集成测试 | 依赖 M1, M2 |
-| M4 | 3-4 天 | 修复循环验证 | 依赖 M3 |
-| M5 | 2-3 天 | 文档审查 + 安全审计 | 依赖 M4 |
-
-**总预估工时**：12-17 天
+| 里程碑 | 新增代码 | 修改代码 | 预估工时 | 优先级 |
+|--------|---------|---------|---------|--------|
+| M1: 多项目工作区 | ~1200 行 | 0 | 3-4 天 | P0 |
+| M2: Worker 隔离 | ~800 行 | ~100 行 | 3-4 天 | P0 |
+| M3: 测试修复 | ~600 行 | 0 | 2-3 天 | P1 |
+| M4: n8n 增强 | ~400 行 | 0 | 1-2 天 | P1 |
+| M5: 配置增强 | ~300 行 | 0 | 1-2 天 | P2 |
+| 文档 + 测试 | ~500 行 | 0 | 2-3 天 | P1 |
+| **总计** | **~3800 行** | **~100 行** | **12-18 天** | - |
 
 ---
 
 ## 📝 使用示例
 
-### 场景 1：快速启动测试修复任务
+### 场景 1：n8n 逐步调用
+
+```javascript
+// 1. 获取 diff
+const step1 = await mcpAgent.call('fetch-diff-from-repo', {
+  repoUrl: 'https://github.com/org/repo.git',
+  branch: 'feature/new-feature',
+  baselineBranch: 'main'
+})
+// 返回: { workspaceId, diff, projectConfig, changedFiles }
+
+// 2. 分析矩阵
+const step2 = await mcpAgent.call('analyze-test-matrix-worker', {
+  workspaceId: step1.workspaceId,
+  diff: step1.diff,
+  projectConfig: step1.projectConfig
+})
+// 返回: { matrix }
+
+// 3. 生成测试
+const step3 = await mcpAgent.call('generate-tests-worker', {
+  workspaceId: step1.workspaceId,
+  matrix: step2.matrix,
+  scenarios: ['happy-path', 'edge-case']
+})
+// 返回: { tests }
+
+// 4. 写入测试文件
+const step4 = await mcpAgent.call('write-test-file', {
+  workspaceId: step1.workspaceId,
+  tests: step3.tests
+})
+// 返回: { filesWritten }
+
+// 5. 运行测试
+const step5 = await mcpAgent.call('run-tests', {
+  workspaceId: step1.workspaceId,
+  testFiles: step4.filesWritten
+})
+// 返回: { testResults }
+
+// 6. (如果有失败) 修复测试
+if (step5.testResults.summary.failed > 0) {
+  const step6 = await mcpAgent.call('fix-failing-tests', {
+    workspaceId: step1.workspaceId,
+    testResults: step5.testResults,
+    maxAttempts: 3
+  })
+  // 返回: { fixes, retriedResults }
+}
+```
+
+### 场景 2：n8n 一键调用
+
+```javascript
+// 一键式流程
+const result = await mcpAgent.call('test-generation-workflow', {
+  repoUrl: 'https://github.com/org/repo.git',
+  branch: 'feature/new-feature',
+  baselineBranch: 'main',
+  scenarios: ['happy-path', 'edge-case', 'error-path'],
+  autoFix: true,
+  maxFixAttempts: 3
+})
+
+// 返回完整结果
+// {
+//   workspaceId,
+//   projectConfig,
+//   matrix,
+//   tests,
+//   filesWritten,
+//   testResults,
+//   fixes
+// }
+```
+
+### 场景 3：直接使用（不通过 n8n）
 
 ```bash
-# 1. 配置环境变量
-export GITLAB_TOKEN=glpat-xxx
-export OPENAI_API_KEY=sk-xxx
-export WORKER_ENABLED=true
-
-# 2. 启动 MCP 服务器
+# 启动 MCP 服务器
 npm start
 
-# 3. 通过 MCP 客户端调用工具
-gitlab-test-repair-start {
-  "gitlabProjectId": "123",
-  "featureBranch": "feature/payments-v2",
-  "baselineBranch": "master",
-  "maxFixAttempts": 3
+# 通过 MCP 客户端调用
+fetch-diff-from-repo {
+  "repoUrl": "/path/to/local/repo",
+  "branch": "feature/new-feature"
 }
 
-# 返回
-{
-  "taskId": "task-1234567890",
-  "status": "pending",
-  "message": "Task created. Use gitlab-task-status to check progress."
-}
-
-# 4. 查询任务状态
-gitlab-task-status {
-  "taskId": "task-1234567890"
-}
-
-# 返回
-{
-  "id": "task-1234567890",
-  "status": "completed",
-  "progress": 100,
-  "result": {
-    "testsGenerated": 24,
-    "testsPassed": 22,
-    "testsFailed": 2,
-    "fixAttempts": 1,
-    "mrUrl": "https://gitlab.com/org/repo/-/merge_requests/456"
-  }
-}
-```
-
-### 场景 2：仅生成测试（不修复）
-
-```bash
-# 使用现有工具
-generate-tests-from-raw-diff {
-  "rawDiff": "...",
-  "identifier": "mr-456",
-  "projectRoot": "/path/to/project"
-}
-```
-
-### 场景 3：n8n 工作流集成
-
-```
-GitLab Webhook (MR created)
-  ↓
-n8n HTTP Request (获取 diff)
-  ↓
-n8n MCP Call: gitlab-test-repair-start
-  ↓
-n8n Schedule: 轮询 gitlab-task-status (每 30s)
-  ↓
-n8n Condition: status === 'completed'
-  ↓
-n8n Notification: 发送通知到 Slack
+# 后续步骤...
 ```
 
 ---
@@ -937,96 +1771,28 @@ n8n Notification: 发送通知到 Slack
 ## ✅ 成功标准
 
 ### 功能完整性
-- ✅ 支持从 GitLab MR 自动触发测试生成
-- ✅ 支持测试失败后的自动修复
-- ✅ 支持多轮修复和回归验证
-- ✅ 支持自动创建 MR 并附带测试摘要
+- ✅ 支持多个 Git 项目并发处理
+- ✅ 支持 Monorepo 自动检测和子项目识别
+- ✅ 支持测试用例修复（而非源代码修复）
+- ✅ 支持 worker 隔离（分析、生成、测试）
+- ✅ 适合在 n8n agent 节点中调用
 
 ### 性能指标
-- ✅ 任务不阻塞 MCP 服务器响应（< 1s 返回 taskId）
-- ✅ Worker 隔离测试执行，不影响其他任务
-- ✅ 支持 3 个并发任务
-- ✅ 工作区创建 < 30s（取决于仓库大小）
+- ✅ Worker 隔离不阻塞主线程
+- ✅ 支持 3 个 worker 并发
+- ✅ 工作区创建 < 30s
+- ✅ 测试修复成功率 > 60%
 
 ### 可用性
-- ✅ 文档完整，有清晰的使用示例
-- ✅ 错误信息友好，便于调试
-- ✅ 支持任务状态追踪和进度查询
-- ✅ 支持手动清理和资源回收
+- ✅ 文档完整，有 n8n 集成示例
+- ✅ 支持逐步调用和一键式调用
+- ✅ 配置文件模板完整
+- ✅ 错误信息清晰
 
 ### 可维护性
 - ✅ 代码模块化，职责清晰
 - ✅ 核心模块有单元测试
-- ✅ 日志完整，便于排查问题
 - ✅ 配置灵活，支持不同环境
-
----
-
-## 🔍 与现有架构的关系
-
-### 保留的优势
-1. **FastMCP 架构**：继续使用 HTTP Streaming，无需自定义传输层
-2. **AgentCoordinator**：复用现有的多 Agent 协同框架
-3. **工具链完整**：保留所有现有的 MCP 工具
-4. **性能优化**：保留 OpenAI 响应缓存、并发控制等优化
-
-### 新增的能力
-1. **任务编排**：支持长时间任务的状态追踪
-2. **Worker 隔离**：避免阻塞主线程
-3. **GitLab 集成**：端到端自动化
-4. **智能修复**：测试驱动修复闭环
-
-### 架构图
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    FastMCP Server (HTTP Streaming)          │
-│                                                               │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │ 现有工具     │  │ GitLab 工具  │  │ Task 工具   │         │
-│  │ - fetch-*   │  │ - start      │  │ - status    │         │
-│  │ - analyze-* │  │ - create-mr  │  └─────────────┘         │
-│  │ - generate-*│  └─────────────┘                           │
-│  │ - write-*   │                                             │
-│  │ - run-*     │                                             │
-│  └─────────────┘                                             │
-│         │                │                  │                │
-│         ▼                ▼                  ▼                │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │           Orchestrator Layer                      │       │
-│  │  ┌─────────────┐  ┌──────────────────┐           │       │
-│  │  │TaskManager  │  │WorkspaceManager  │           │       │
-│  │  └─────────────┘  └──────────────────┘           │       │
-│  └──────────────────────────────────────────────────┘       │
-│         │                                                     │
-│         ▼                                                     │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │           Agent Layer (保留)                      │       │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │       │
-│  │  │TestAgent │  │FixAgent  │  │Analyzer  │       │       │
-│  │  └──────────┘  └──────────┘  └──────────┘       │       │
-│  │         ▲                                         │       │
-│  │         │ AgentCoordinator (并发控制)            │       │
-│  └──────────────────────────────────────────────────┘       │
-│         │                                                     │
-│         ▼                                                     │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │           Worker Layer (新增)                     │       │
-│  │  ┌─────────────┐  ┌──────────────┐               │       │
-│  │  │TestRunner   │  │FixWorker     │               │       │
-│  │  │Worker       │  │(可选)        │               │       │
-│  │  └─────────────┘  └──────────────┘               │       │
-│  └──────────────────────────────────────────────────┘       │
-│         │                                                     │
-│         ▼                                                     │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │           Client Layer (保留)                     │       │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │       │
-│  │  │OpenAI    │  │Embedding │  │GitLab    │       │       │
-│  │  └──────────┘  └──────────┘  └──────────┘       │       │
-│  └──────────────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────────────┘
-```
 
 ---
 
@@ -1035,39 +1801,14 @@ n8n Notification: 发送通知到 Slack
 - 原始设计文档：`commit-branch-test-repair.md`
 - 当前项目状态：`.project-status`
 - FastMCP 文档：https://github.com/jlowin/fastmcp
-- GitLab API 文档：https://docs.gitlab.com/ee/api/
-
----
-
-## 🤝 贡献指南
-
-### 实现者指引
-
-1. **按里程碑顺序实现**：M1 → M2 → M3 → M4 → M5
-2. **每个里程碑完成后**：
-   - 编写单元测试
-   - 更新文档
-   - 在 PR 中引用对应里程碑
-   - 通过验证标准
-3. **代码风格**：遵循现有项目的 TypeScript 风格
-4. **Commit 规范**：使用 `[M1]`, `[M2]` 等前缀标识里程碑
-
-### 常见问题
-
-**Q: Worker 机制是否必需？**
-A: 对于短时间任务（< 5s）可以不使用 worker。但对于长时间测试执行（> 30s）和多并发场景，worker 可以避免阻塞 FastMCP 的 SSE 长连接。
-
-**Q: 与 n8n 集成的工具会受影响吗？**
-A: 不会。现有的 `analyze-raw-diff-test-matrix` 和 `generate-tests-from-raw-diff` 工具保持不变，可以继续使用。
-
-**Q: FixAgent 必须使用 Q CLI 吗？**
-A: 不一定。FixAgent 可以直接调用 OpenAI API 生成修复补丁，Q CLI 是可选的增强方案。
-
-**Q: 任务状态如何持久化？**
-A: M1 阶段使用内存存储即可。后续可以扩展到 Redis 或文件系统。
 
 ---
 
 ## 📅 更新日志
 
-- **2024-11-15**: 初始版本，基于 commit-branch-test-repair.md 和当前代码库分析
+- **2024-11-15**: 初始版本，基于用户反馈重新调整
+  - 明确修复是指修复测试用例，不是源代码
+  - 扩展 worker 机制到分析/生成/测试
+  - 强化 n8n 集成设计
+  - 增强 Monorepo 支持
+  - 补充配置文件推荐
