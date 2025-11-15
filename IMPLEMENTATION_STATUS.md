@@ -84,13 +84,30 @@ Environment variables for worker control:
 
 ---
 
-## M3: 测试用例修复（P1）- ⚠️ NOT STARTED
+## M3: 测试用例修复（P1）- ✅ COMPLETE
 
-Tasks remaining:
-- [ ] M3.1: Create TestFixAgent
-- [ ] M3.2: Create Prompt Template
-- [ ] M3.3: Create FixFailingTestsTool
-- [ ] M3.4: Register tool to MCP
+All tasks in M3 have now been completed:
+
+- ✅ M3.1: TestFixAgent created (`src/agents/test-fix-agent.ts`)
+  - 分析失败的测试用例
+  - 生成修复方案（只修复测试代码）
+  - 支持置信度评估
+
+- ✅ M3.2: Prompt Template created (`src/prompts/test-fix-agent.md`)
+  - 核心原则：只修复测试、最小化修改、保持测试意图
+  - 6种常见失败场景与修复策略
+  - 清晰的输出格式说明
+
+- ✅ M3.3: FixFailingTestsTool created (`src/tools/fix-failing-tests.ts`)
+  - 提取失败测试信息（Vitest/Jest）
+  - 调用 TestFixAgent 生成修复
+  - 应用修复并重新运行测试
+  - 支持多轮修复（最多 3 次）
+  - 置信度阈值过滤（≥ 0.5）
+
+- ✅ M3.4: Tool registered to MCP (`src/index.ts`)
+  - FixFailingTestsTool 已注册
+  - 可通过 MCP 客户端调用
 
 ---
 

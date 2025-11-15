@@ -27,6 +27,7 @@ import { GenerateTestsTool } from './tools/generate-tests.js';
 import { GenerateTestsWorkerTool } from './tools/generate-tests-worker.js';
 import { WriteTestFileTool } from './tools/write-test-file.js';
 import { RunTestsTool } from './tools/run-tests.js';
+import { FixFailingTestsTool } from './tools/fix-failing-tests.js';
 import { AnalyzeRawDiffTestMatrixTool } from './tools/analyze-raw-diff-test-matrix.js';
 import { GenerateTestsFromRawDiffTool } from './tools/generate-tests-from-raw-diff.js';
 import { getEnv, validateAiConfig } from './config/env.js';
@@ -152,13 +153,13 @@ function initialize() {
   // 4. 测试操作工具
   toolRegistry.register(new WriteTestFileTool());
   toolRegistry.register(new RunTestsTool());
+  toolRegistry.register(new FixFailingTestsTool());
   
   // 5. 原始 Diff 工具
   toolRegistry.register(new AnalyzeRawDiffTestMatrixTool(openai, state));
   toolRegistry.register(new GenerateTestsFromRawDiffTool(openai, embedding, state, contextStore));
   
   // TODO: 其他辅助工具待实现:
-  // - 测试用例修复工具 (M3)
   // - 完整工作流工具 (M4)
   // - 配置文件生成工具 (M5)
 
