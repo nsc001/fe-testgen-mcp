@@ -70,9 +70,12 @@ test framework: vitest
 对于 Monorepo 项目，系统会：
 
 1. 自动检测项目是否为 Monorepo（pnpm、yarn、lerna、nx等）
-2. 根据变更文件识别主要变更的子项目
-3. 优先从子项目根目录加载 `.cursor/rules/test-strategy.md`
-4. 在子项目根目录检测测试框架和已有测试
+2. 根据变更文件识别**所有**受影响的子项目
+3. 自动过滤掉**不需要测试的子项目**（如纯类型包、没有测试框架的工具包）
+4. 优先从子项目根目录加载 `.cursor/rules/test-strategy.md`
+5. 在子项目根目录检测测试框架和已有测试
+
+详细的 Monorepo 测试策略，请参考 [Monorepo 测试策略文档](./monorepo-testing-strategy.md)。
 
 ## API 使用示例
 
@@ -94,13 +97,22 @@ test framework: vitest
   "diff": "...",
   "projectConfig": {
     "projectRoot": "/path/to/repo",
-    "packageRoot": "/path/to/repo/packages/auth",  // Monorepo子项目
+    "packageRoot": "/path/to/repo/packages/auth",  // 主要子项目（可测试且变更最多）
     "isMonorepo": true,
     "monorepoType": "pnpm",
     "testFramework": "vitest",  // 从规则文件读取或自动检测
     "hasExistingTests": true,
     "testPattern": "**/*.{test,spec}.{ts,tsx,js,jsx}",
-    "customRules": "..."  // .cursor/rules/test-strategy.md 的内容
+    "customRules": "...",  // .cursor/rules/test-strategy.md 的内容
+    "affectedSubProjects": [
+      "/path/to/repo/packages/auth",
+      "/path/to/repo/packages/ui",
+      "/path/to/repo/apps/web"
+    ],
+    "testableSubProjects": [
+      "/path/to/repo/packages/auth",
+      "/path/to/repo/packages/ui"
+    ]
   },
   "changedFiles": [
     "packages/auth/src/login.ts",

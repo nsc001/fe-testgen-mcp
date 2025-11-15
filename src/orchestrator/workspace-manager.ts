@@ -25,7 +25,9 @@ export interface Workspace {
   workDir: string;
   createdAt: number;
   isTemporary: boolean;
-  packageRoot?: string;     // 识别到的子项目根目录（monorepo）
+  packageRoot?: string;             // 主要子项目根目录（monorepo）
+  affectedSubProjects?: string[];   // 所有受影响的子项目
+  testableSubProjects?: string[];   // 需要生成测试的子项目
 }
 
 interface WorkspaceManagerOptions {

@@ -9,24 +9,50 @@ import { logger } from '../utils/logger.js';
 
 export interface ProjectConfig {
   projectRoot: string;
-  packageRoot?: string; // Monorepo 子项目根目录
+  packageRoot?: string; // Monorepo 子项目根目录（主要的）
   isMonorepo: boolean;
   monorepoType?: 'pnpm' | 'yarn' | 'npm' | 'lerna' | 'nx' | 'rush';
   testFramework?: 'vitest' | 'jest' | 'none';
   hasExistingTests: boolean;
   testPattern?: string;
-  customRules?: string; // 从 .cursor/rule/fe-mcp.md 读取
+  customRules?: string; // 从 .cursor/rules/test-strategy.md 读取
+  affectedSubProjects?: string[]; // 所有受影响的子项目
+  testableSubProjects?: string[]; // 需要生成测试的子项目（有测试框架的）
 }
 
 export class ProjectDetector {
   /**
    * 检测项目配置
+   * @param workDir 项目根目录
+   * @param packageRoot 主要子项目根目录（可选）
+   * @param changedFiles 变更文件列表（可选，用于 monorepo 分析）
    */
-  async detectProject(workDir: string, packageRoot?: string): Promise<ProjectConfig> {
-    logger.info('[ProjectDetector] Detecting project', { workDir, packageRoot });
+  async detectProject(
+    workDir: string,
+    packageRoot?: string,
+    changedFiles?: string[]
+  ): Promise<ProjectConfig> {
+    logger.info('[ProjectDetector] Detecting project', { workDir, packageRoot, changedFilesCount: changedFiles?.length });
 
     const isMonorepo = await this.detectMonorepo(workDir);
     const monorepoType = isMonorepo ? await this.detectMonorepoType(workDir) : undefined;
+    
+    // 分析 Monorepo 子项目（如果提供了变更文件）
+    let affectedSubProjects: string[] | undefined;
+    let testableSubProjects: string[] | undefined;
+    
+    if (isMonorepo && changedFiles && changedFiles.length > 0) {
+      affectedSubProjects = await this.detectSubProjects(workDir, changedFiles);
+      if (affectedSubProjects.length > 0) {
+        testableSubProjects = await this.filterTestableSubProjects(affectedSubProjects);
+        logger.info('[ProjectDetector] Monorepo analysis', {
+          affected: affectedSubProjects.length,
+          testable: testableSubProjects.length,
+          affectedList: affectedSubProjects,
+          testableList: testableSubProjects,
+        });
+      }
+    }
     
     // 加载自定义规则（优先从 packageRoot 加载，如果是 monorepo）
     const effectiveRoot = packageRoot || workDir;
@@ -50,6 +76,8 @@ export class ProjectDetector {
       hasExistingTests,
       testPattern,
       customRules,
+      affectedSubProjects,
+      testableSubProjects,
     };
 
     logger.info('[ProjectDetector] Project detected', {
@@ -61,6 +89,8 @@ export class ProjectDetector {
       packageRoot: config.packageRoot,
       customRulesLoaded: Boolean(config.customRules),
       frameworkFromRules: Boolean(frameworkFromRules),
+      affectedSubProjects: config.affectedSubProjects?.length || 0,
+      testableSubProjects: config.testableSubProjects?.length || 0,
     });
 
     return config;
@@ -70,60 +100,84 @@ export class ProjectDetector {
    * 检测 Monorepo 子项目（根据变更文件）
    */
   async detectSubProject(workDir: string, changedFiles: string[]): Promise<string | undefined> {
+    const candidates = await this.detectSubProjects(workDir, changedFiles);
+    return candidates.length > 0 ? candidates[0] : undefined;
+  }
+
+  /**
+   * 检测所有受影响的子项目
+   * 返回按变更文件数量排序的列表
+   */
+  async detectSubProjects(workDir: string, changedFiles: string[]): Promise<string[]> {
     if (changedFiles.length === 0) {
-      return undefined;
+      return [];
     }
 
-    // 查找 packages/ 或 apps/ 目录
-    const packagesDir = path.join(workDir, 'packages');
-    const appsDir = path.join(workDir, 'apps');
-
-    let subDirs: string[] = [];
-
-    if (existsSync(packagesDir)) {
-      const entries = await fs.readdir(packagesDir, { withFileTypes: true });
-      subDirs.push(...entries.filter((e) => e.isDirectory()).map((e) => path.join('packages', e.name)));
-    }
-
-    if (existsSync(appsDir)) {
-      const entries = await fs.readdir(appsDir, { withFileTypes: true });
-      subDirs.push(...entries.filter((e) => e.isDirectory()).map((e) => path.join('apps', e.name)));
-    }
-
+    const subDirs = await this.findMonorepoSubDirs(workDir);
     if (subDirs.length === 0) {
-      return undefined;
+      return [];
     }
 
-    // 统计每个子项目的变更文件数
-    const subProjectCounts = new Map<string, number>();
+    const subProjectCounts = new Map<string, { count: number; files: string[] }>();
     for (const file of changedFiles) {
       for (const subDir of subDirs) {
         if (file.startsWith(subDir + '/')) {
-          subProjectCounts.set(subDir, (subProjectCounts.get(subDir) || 0) + 1);
+          const record = subProjectCounts.get(subDir) || { count: 0, files: [] };
+          record.count += 1;
+          record.files.push(file);
+          subProjectCounts.set(subDir, record);
         }
       }
     }
 
-    if (subProjectCounts.size === 0) {
-      return undefined;
+    const sorted = Array.from(subProjectCounts.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([subProject]) => path.join(workDir, subProject));
+
+    if (sorted.length > 0) {
+      logger.info('[ProjectDetector] Sub-projects detected', {
+        candidates: sorted,
+        details: Array.from(subProjectCounts.entries()),
+      });
     }
 
-    // 返回变更最多的子项目
-    let maxCount = 0;
-    let maxSubProject: string | undefined;
-    for (const [subProject, count] of subProjectCounts) {
-      if (count > maxCount) {
-        maxCount = count;
-        maxSubProject = subProject;
+    return sorted;
+  }
+
+  /**
+   * 查找 Monorepo 子项目目录（packages/*, apps/*, libs/* 等）
+   */
+  private async findMonorepoSubDirs(workDir: string): Promise<string[]> {
+    const potentialDirs = [
+      'packages',
+      'apps',
+      'libs',
+      'services',
+      'modules',
+      'packages/*', // pnpm workspace 可在 pnpm-workspace.yaml 中定义
+    ];
+
+    const result = new Set<string>();
+
+    for (const dir of potentialDirs) {
+      if (dir === 'packages/*') {
+        continue; // 先跳过，需要根据 pnpm-workspace.yaml 等配置具体解析
       }
+
+      const fullPath = path.join(workDir, dir);
+      if (!existsSync(fullPath)) {
+        continue;
+      }
+
+      const entries = await fs.readdir(fullPath, { withFileTypes: true });
+      entries
+        .filter((entry) => entry.isDirectory())
+        .forEach((entry) => {
+          result.add(path.join(dir, entry.name));
+        });
     }
 
-    if (maxSubProject) {
-      logger.info('[ProjectDetector] Sub-project detected', { subProject: maxSubProject, changedFiles: maxCount });
-      return path.join(workDir, maxSubProject);
-    }
-
-    return undefined;
+    return Array.from(result);
   }
 
   /**
@@ -183,6 +237,84 @@ export class ProjectDetector {
       return 'npm';
     }
     return 'npm';
+  }
+
+  /**
+   * 检查子项目是否应该生成测试
+   * 条件：1) 有测试框架  2) 不是纯类型/工具包
+   */
+  async shouldGenerateTests(subProjectPath: string): Promise<boolean> {
+    const framework = await this.detectTestFramework(subProjectPath);
+    
+    // 没有测试框架，不生成测试
+    if (framework === 'none') {
+      logger.info('[ProjectDetector] No test framework, skipping', { path: subProjectPath });
+      return false;
+    }
+
+    // 检查是否是纯类型包或工具包（通常不需要测试）
+    const packageJsonPath = path.join(subProjectPath, 'package.json');
+    if (existsSync(packageJsonPath)) {
+      try {
+        const content = await fs.readFile(packageJsonPath, 'utf-8');
+        const packageJson = JSON.parse(content);
+        
+        // 检查包名，如果是 types, constants, interfaces 等纯定义包，可能不需要测试
+        const name = packageJson.name || '';
+        const lowercaseName = name.toLowerCase();
+        
+        // 如果明确标记为类型包
+        if (packageJson.types && !packageJson.main && !packageJson.module) {
+          logger.info('[ProjectDetector] Pure types package, skipping', { name, path: subProjectPath });
+          return false;
+        }
+
+        // 常见的不需要测试的包名模式
+        const skipPatterns = [
+          /^@.*\/types$/,         // @xxx/types
+          /^.*-types$/,           // xxx-types
+          /^types-/,              // types-xxx
+          /^@.*\/constants$/,     // @xxx/constants
+          /^.*-constants$/,       // xxx-constants
+        ];
+
+        if (skipPatterns.some(pattern => pattern.test(lowercaseName))) {
+          logger.info('[ProjectDetector] Utility/types package, skipping', { name, path: subProjectPath });
+          return false;
+        }
+      } catch (error) {
+        logger.warn('[ProjectDetector] Failed to check package.json', { path: subProjectPath, error });
+      }
+    }
+
+    // 有测试框架且不是工具包，应该生成测试
+    logger.info('[ProjectDetector] Should generate tests', { path: subProjectPath, framework });
+    return true;
+  }
+
+  /**
+   * 筛选需要生成测试的子项目
+   */
+  async filterTestableSubProjects(subProjects: string[]): Promise<string[]> {
+    const results = await Promise.all(
+      subProjects.map(async (subProject) => {
+        const shouldGenerate = await this.shouldGenerateTests(subProject);
+        return { subProject, shouldGenerate };
+      })
+    );
+
+    const testable = results
+      .filter((r) => r.shouldGenerate)
+      .map((r) => r.subProject);
+
+    logger.info('[ProjectDetector] Testable sub-projects', {
+      total: subProjects.length,
+      testable: testable.length,
+      skipped: subProjects.length - testable.length,
+      testableList: testable,
+    });
+
+    return testable;
   }
 
   /**

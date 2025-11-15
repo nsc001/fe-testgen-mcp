@@ -108,20 +108,55 @@ export class FetchDiffFromRepoTool extends BaseTool<FetchDiffFromRepoInput, Fetc
     logger.info('[FetchDiffFromRepo] Changed files retrieved', { count: changedFiles.length });
 
     // 3. 尝试识别子项目（monorepo 场景）
-    let packageRoot: string | undefined;
+    let packageRoot = workspace.packageRoot;
+    let affectedSubProjects: string[] = [];
+    let testableSubProjects: string[] = [];
+
     if (changedFiles.length > 0) {
-      const subProject = await projectDetector.detectSubProject(workspace.workDir, changedFiles);
-      if (subProject) {
-        packageRoot = subProject;
-        workspace.packageRoot = subProject;
-        logger.info('[FetchDiffFromRepo] Sub-project identified', { subProject });
+      affectedSubProjects = await projectDetector.detectSubProjects(workspace.workDir, changedFiles);
+      if (affectedSubProjects.length > 0) {
+        testableSubProjects = await projectDetector.filterTestableSubProjects(affectedSubProjects);
+
+        if (!packageRoot) {
+          packageRoot = testableSubProjects[0] ?? affectedSubProjects[0];
+        }
+
+        logger.info('[FetchDiffFromRepo] Sub-project analysis', {
+          affectedCount: affectedSubProjects.length,
+          testableCount: testableSubProjects.length,
+          primary: packageRoot,
+        });
       }
     }
 
-    // 4. 使用识别的子项目根目录检测项目配置（这样可以正确加载子项目的规则）
-    const projectConfig = await projectDetector.detectProject(workspace.workDir, packageRoot);
+    if (packageRoot) {
+      workspace.packageRoot = packageRoot;
+    }
 
-    // 5. 获取 diff
+    // 4. 检测项目配置（包括所有受影响的子项目和可测试的子项目）
+    const projectConfig = await projectDetector.detectProject(
+      workspace.workDir,
+      packageRoot,
+      changedFiles
+    );
+
+    // 如果 detectProject 没有返回这些信息，使用上一步的结果补充
+    if (!projectConfig.affectedSubProjects && affectedSubProjects.length > 0) {
+      projectConfig.affectedSubProjects = affectedSubProjects;
+    }
+    if (!projectConfig.testableSubProjects && testableSubProjects.length > 0) {
+      projectConfig.testableSubProjects = testableSubProjects;
+    }
+
+    // 5. 更新 workspace 信息
+    if (projectConfig.affectedSubProjects) {
+      workspace.affectedSubProjects = projectConfig.affectedSubProjects;
+    }
+    if (projectConfig.testableSubProjects) {
+      workspace.testableSubProjects = projectConfig.testableSubProjects;
+    }
+
+    // 6. 获取 diff
     const diff = await workspaceManager.getDiff(workspaceId);
 
     return {
