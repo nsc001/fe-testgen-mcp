@@ -11,6 +11,7 @@ import type { MCPTrackingService } from '../utils/tracking-service.js';
 import type { WorkspaceManager } from '../orchestrator/workspace-manager.js';
 import type { ProjectDetector } from '../orchestrator/project-detector.js';
 import type { GitClient } from '../clients/git-client.js';
+import type { WorkerPool } from '../workers/worker-pool.js';
 
 export interface AppContext {
   openai: OpenAIClient;
@@ -23,6 +24,7 @@ export interface AppContext {
   workspaceManager?: WorkspaceManager;
   projectDetector?: ProjectDetector;
   gitClient?: GitClient;
+  workerPool?: WorkerPool;
 }
 
 let currentContext: AppContext | null = null;

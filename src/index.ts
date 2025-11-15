@@ -17,15 +17,21 @@ import { Cache } from './cache/cache.js';
 import { StateManager } from './state/manager.js';
 import { WorkspaceManager } from './orchestrator/workspace-manager.js';
 import { ProjectDetector } from './orchestrator/project-detector.js';
+import { WorkerPool } from './workers/worker-pool.js';
 import { FetchCommitChangesTool } from './tools/fetch-commit-changes.js';
 import { FetchDiffFromRepoTool } from './tools/fetch-diff-from-repo.js';
 import { DetectProjectConfigTool } from './tools/detect-project-config.js';
 import { AnalyzeTestMatrixTool } from './tools/analyze-test-matrix.js';
+import { AnalyzeTestMatrixWorkerTool } from './tools/analyze-test-matrix-worker.js';
 import { GenerateTestsTool } from './tools/generate-tests.js';
+import { GenerateTestsWorkerTool } from './tools/generate-tests-worker.js';
 import { WriteTestFileTool } from './tools/write-test-file.js';
 import { RunTestsTool } from './tools/run-tests.js';
+import { FixFailingTestsTool } from './tools/fix-failing-tests.js';
+import { TestGenerationWorkflowTool } from './tools/test-generation-workflow.js';
 import { AnalyzeRawDiffTestMatrixTool } from './tools/analyze-raw-diff-test-matrix.js';
 import { GenerateTestsFromRawDiffTool } from './tools/generate-tests-from-raw-diff.js';
+import { GenerateCursorRuleTool } from './tools/generate-cursor-rule.js';
 import { getEnv, validateAiConfig } from './config/env.js';
 import { loadConfig } from './config/loader.js';
 import { logger } from './utils/logger.js';
@@ -40,6 +46,7 @@ let trackingService: MCPTrackingService | undefined;
 let gitClientInstance: GitClient | undefined;
 let workspaceManagerInstance: WorkspaceManager | undefined;
 let projectDetectorInstance: ProjectDetector | undefined;
+let workerPoolInstance: WorkerPool | undefined;
 let workspaceCleanupInterval: NodeJS.Timeout | undefined;
 
 function initialize() {
@@ -100,6 +107,10 @@ function initialize() {
   gitClientInstance = new GitClient();
   workspaceManagerInstance = new WorkspaceManager(gitClientInstance);
   projectDetectorInstance = new ProjectDetector();
+  if (process.env.WORKER_ENABLED !== 'false') {
+    const maxWorkers = parseInt(process.env.WORKER_MAX_POOL || '3', 10);
+    workerPoolInstance = new WorkerPool(Number.isNaN(maxWorkers) ? 3 : maxWorkers);
+  }
 
   // 设置全局上下文
   setAppContext({
@@ -113,6 +124,7 @@ function initialize() {
     gitClient: gitClientInstance,
     workspaceManager: workspaceManagerInstance,
     projectDetector: projectDetectorInstance,
+    workerPool: workerPoolInstance,
   });
 
   // 启动定时清理任务
@@ -130,19 +142,26 @@ function initialize() {
   toolRegistry.register(new FetchDiffFromRepoTool());
   toolRegistry.register(new DetectProjectConfigTool());
 
-  // 2. Agent 封装工具
+  // 2. Agent 封装工具（直接执行版本）
   toolRegistry.register(new AnalyzeTestMatrixTool(openai, state));
   toolRegistry.register(
     new GenerateTestsTool(openai, embedding, state, contextStore)
   );
 
+  // 3. Worker 版本（异步执行）
+  toolRegistry.register(new AnalyzeTestMatrixWorkerTool(openai));
+  toolRegistry.register(new GenerateTestsWorkerTool(openai, embedding, state, contextStore));
+
+  // 4. 测试操作工具
   toolRegistry.register(new WriteTestFileTool());
   toolRegistry.register(new RunTestsTool());
+  toolRegistry.register(new FixFailingTestsTool());
+  toolRegistry.register(new TestGenerationWorkflowTool());
+  toolRegistry.register(new GenerateCursorRuleTool());
+  
+  // 5. 原始 Diff 工具
   toolRegistry.register(new AnalyzeRawDiffTestMatrixTool(openai, state));
   toolRegistry.register(new GenerateTestsFromRawDiffTool(openai, embedding, state, contextStore));
-  
-  // TODO: 其他辅助工具待实现:
-  // - 更多 n8n 集成工具
 
   // 初始化缓存预热（异步执行，不阻塞启动）
   const warmer = initializeCacheWarmer({
@@ -367,6 +386,10 @@ process.on('SIGINT', async () => {
 
   if (workspaceCleanupInterval) {
     clearInterval(workspaceCleanupInterval);
+  }
+
+  if (workerPoolInstance) {
+    await workerPoolInstance.cleanup();
   }
 
   if (workspaceManagerInstance) {
