@@ -12,6 +12,7 @@ import { BaseTool, ToolMetadata } from '../core/base-tool.js';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../utils/logger.js';
+import { getAppContext } from '../core/app-context.js';
 
 const execAsync = promisify(exec);
 
@@ -19,6 +20,7 @@ const execAsync = promisify(exec);
 export const RunTestsInputSchema = z.object({
   testFiles: z.array(z.string()).optional().describe('要运行的测试文件路径（相对于 projectRoot）'),
   projectRoot: z.string().optional().describe('项目根目录绝对路径（默认当前目录）'),
+  workspaceId: z.string().optional().describe('工作区 ID，如果启用 Worker 模式则必需'),
   framework: z.enum(['vitest', 'jest']).optional().describe('测试框架（可选，自动检测）'),
   watch: z.boolean().optional().describe('监听模式（默认 false）'),
   coverage: z.boolean().optional().describe('生成覆盖率报告（默认 false）'),
@@ -28,6 +30,7 @@ export const RunTestsInputSchema = z.object({
 export interface RunTestsInput {
   testFiles?: string[]; // 要运行的测试文件（可选，默认运行所有测试）
   projectRoot?: string; // 项目根目录（默认当前目录）
+  workspaceId?: string; // 工作区 ID（Worker 模式需要）
   framework?: 'vitest' | 'jest'; // 测试框架（可选，自动检测）
   watch?: boolean; // 监听模式（默认 false）
   coverage?: boolean; // 生成覆盖率报告（默认 false）
@@ -37,6 +40,26 @@ export interface RunTestsInput {
 export interface RunTestsOutput {
   success: boolean;
   framework: string;
+  summary: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    duration: number;
+  };
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+interface WorkerTestPayload {
+  workDir: string;
+  testFiles?: string[];
+  framework: 'vitest' | 'jest';
+  timeout?: number;
+}
+
+interface WorkerTestResult {
   summary: {
     total: number;
     passed: number;
@@ -82,6 +105,10 @@ export class RunTestsTool extends BaseTool<RunTestsInput, RunTestsOutput> {
             type: 'string',
             description: '项目根目录绝对路径（默认当前目录）',
           },
+          workspaceId: {
+            type: 'string',
+            description: '工作区 ID，如果启用 Worker 模式则必需',
+          },
           framework: {
             type: 'string',
             enum: ['vitest', 'jest'],
@@ -110,6 +137,7 @@ export class RunTestsTool extends BaseTool<RunTestsInput, RunTestsOutput> {
     const {
       testFiles,
       projectRoot = process.cwd(),
+      workspaceId,
       framework,
       watch = false,
       coverage = false,
@@ -119,7 +147,45 @@ export class RunTestsTool extends BaseTool<RunTestsInput, RunTestsOutput> {
     // 自动检测测试框架
     const detectedFramework = framework || (await this.detectFramework(projectRoot));
 
-    logger.info('[RunTestsTool] Running tests', {
+    // 尝试使用 Worker 执行（仅在非 watch 模式下）
+    if (!watch && !coverage && workspaceId) {
+      const context = getAppContext();
+      const workerPool = (context as any).workerPool;
+
+      if (workerPool && process.env.WORKER_ENABLED !== 'false') {
+        try {
+          logger.info('[RunTestsTool] Using worker execution', { workspaceId });
+          const result: WorkerTestResult = await workerPool.executeTask({
+            type: 'test',
+            workspaceId,
+            payload: {
+              workDir: projectRoot,
+              testFiles,
+              framework: detectedFramework,
+              timeout,
+            } as WorkerTestPayload,
+            timeout: timeout + 5000, // Add buffer time
+          });
+
+          return {
+            success: result.exitCode === 0,
+            framework: detectedFramework,
+            summary: result.summary,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+          };
+        } catch (error) {
+          logger.warn('[RunTestsTool] Worker execution failed, falling back to direct', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          // Fall through to direct execution
+        }
+      }
+    }
+
+    // 直接执行（或回退）
+    logger.info('[RunTestsTool] Running tests directly', {
       framework: detectedFramework,
       testFiles: testFiles?.length || 'all',
       projectRoot,
