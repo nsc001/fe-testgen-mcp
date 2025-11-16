@@ -3,7 +3,6 @@
  * 基于 MCP 协议（FastMCP 实现）的前端代码审查和单元测试生成工具
  */
 
-import './utils/polyfills.js';
 import { FastMCP } from 'fastmcp';
 import dotenv from 'dotenv';
 
