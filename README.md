@@ -89,6 +89,18 @@ TRACKING_METRICS_TYPE=metricsType1   # 指标类型（默认值）
 ENABLE_FILE_LOG=false                # 是否启用文件日志（默认 false，开发模式自动启用）
 ENABLE_CONSOLE_LOG=false             # 是否启用控制台日志（默认 false，开发模式自动启用）
 LOG_LEVEL=info                       # 日志级别：debug/info/warn/error
+
+# Worker 配置（可选，用于隔离耗时任务）
+WORKER_ENABLED=true                  # 是否启用 Worker 线程（默认 true）
+WORKER_MAX_POOL=3                    # Worker 池大小（默认 3）
+
+# 工作区配置（可选，用于多项目管理）
+WORKSPACE_CLEANUP_INTERVAL=600000    # 清理间隔，毫秒（默认 10 分钟）
+WORKSPACE_MAX_AGE=3600000            # 工作区最大存活时间，毫秒（默认 1 小时）
+
+# 测试修复配置（可选，用于自动修复失败测试）
+FIX_MAX_ATTEMPTS=3                   # 最大修复尝试次数（默认 3）
+FIX_CONFIDENCE_THRESHOLD=0.7         # 置信度阈值（默认 0.7）
 ```
 
 **重要提示：**
@@ -372,21 +384,31 @@ tracking:
 
 ### 可用工具
 
-本 MCP Server 当前提供 **10 个核心工具**，完整的 Agent 系统已实现并封装为 MCP 工具。
+本 MCP Server 当前提供 **15 个核心工具**，完整的 Agent 系统已实现并封装为 MCP 工具。
 
-> ✅ **开发状态**: 核心 Agent 系统和辅助工具已完整实现并封装为 MCP 工具，包括并发控制、响应缓存、n8n 集成等优化。详见 [.project-status](./.project-status) 了解当前进度。
+> ✅ **开发状态**: 核心 Agent 系统和辅助工具已完整实现并封装为 MCP 工具，包括并发控制、响应缓存、n8n 集成、Worker 机制、多项目管理等优化。详见 [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) 了解当前进度。
 
 > ✅ **已实现核心功能**:
 > - **AgentCoordinator**: 多 Agent 协作框架，支持并行执行、优先级调度、自动重试
 > - **TestAgent**: 完整的测试生成流程（矩阵分析 + 4 种场景并行生成）
+> - **WorkerPool**: Worker 线程池，隔离耗时任务（分析、生成、测试执行）
+> - **WorkspaceManager**: 多项目工作区管理，支持远程仓库和本地路径
+> - **TestFixAgent**: 智能修复失败的测试用例
 > - **性能优化**: OpenAI 响应缓存、p-limit 并发控制、自动去重
 
 > 📋 **工具状态**:
 > - ✅ **fetch-commit-changes** – Git commit → diff
+> - ✅ **fetch-diff-from-repo** – 仓库 URL + 分支 → diff + 项目配置 *(新)*
+> - ✅ **detect-project-config** – 检测项目配置（Monorepo、测试框架） *(新)*
 > - ✅ **analyze-test-matrix** – diff → 功能与测试矩阵
+> - ✅ **analyze-test-matrix-worker** – Worker 版本的测试矩阵分析 *(新)*
 > - ✅ **generate-tests** – 矩阵 → 测试代码
+> - ✅ **generate-tests-worker** – Worker 版本的测试生成 *(新)*
 > - ✅ **write-test-file** – 将测试代码写入磁盘
-> - ✅ **run-tests** – 执行 Vitest/Jest 并解析结果
+> - ✅ **run-tests** – 执行 Vitest/Jest 并解析结果（支持 Worker 模式）
+> - ✅ **fix-failing-tests** – 自动修复失败的测试用例 *(新)*
+> - ✅ **test-generation-workflow** – 一键式完整测试生成流程 *(新)*
+> - ✅ **generate-cursor-rule** – 生成项目配置文件 *(新)*
 > - ✅ **analyze-raw-diff-test-matrix** – raw diff → 测试矩阵
 > - ✅ **generate-tests-from-raw-diff** – raw diff → 测试代码
 
@@ -461,12 +483,13 @@ tracking:
 
 #### 5. run-tests
 
-**功能：** 执行 Vitest/Jest 并返回结构化的执行结果，支持覆盖率、监听模式以及定制测试文件列表。
+**功能：** 执行 Vitest/Jest 并返回结构化的执行结果，支持覆盖率、监听模式以及定制测试文件列表。自动检测 Worker 池，优先使用 Worker 线程执行，失败时自动回退。
 
 ```typescript
 {
   testFiles?: string[];
   projectRoot?: string;
+  workspaceId?: string;       // 启用 Worker 模式时建议提供
   framework?: 'vitest' | 'jest';
   watch?: boolean;
   coverage?: boolean;
@@ -515,31 +538,212 @@ tracking:
 2. 调用 `generate-tests-from-raw-diff` 生成测试与统计信息
 3. （可选）将结果写入文件或发布到代码托管平台
 
+#### 8. fetch-diff-from-repo *(新增)*
+
+**功能：** 通过 Git 仓库 URL 或本地路径 + 分支名获取 diff，自动检测项目配置。支持多项目并发处理。
+
+```typescript
+{
+  repoUrl: string;           // Git 仓库 URL 或本地路径
+  branch: string;            // 要分析的分支
+  baselineBranch?: string;   // 对比基准分支（默认 origin/HEAD）
+  workDir?: string;          // 可选：指定工作目录
+}
+```
+
+**输出：**
+- `workspaceId`: 工作区 ID（用于后续工具串联）
+- `diff`: Git diff 内容
+- `projectConfig`: 项目配置（Monorepo 类型、测试框架、是否已有测试等）
+- `changedFiles`: 变更文件列表
+
+**使用场景：** 
+- n8n 工作流中从 Git 仓库获取代码变更
+- 支持远程仓库（自动 clone）和本地路径
+- 自动检测项目类型和测试配置
+
+#### 9. detect-project-config *(新增)*
+
+**功能：** 检测工作区的项目配置信息。
+
+```typescript
+{
+  workspaceId: string;  // 由 fetch-diff-from-repo 返回
+}
+```
+
+**输出：** 项目配置对象（`ProjectConfig`），包括：
+- `isMonorepo`: 是否是 Monorepo
+- `monorepoType`: Monorepo 类型（pnpm/yarn/npm/lerna/nx/rush）
+- `testFramework`: 测试框架（vitest/jest）
+- `hasExistingTests`: 是否已有测试
+- `customRules`: 自定义规则内容（从 .cursor/rule/fe-mcp.md 读取）
+
+#### 10. analyze-test-matrix-worker *(新增)*
+
+**功能：** Worker 版本的测试矩阵分析，在独立线程中执行，避免阻塞主进程。
+
+```typescript
+{
+  workspaceId: string;
+  diff: string;
+  projectConfig: ProjectConfig;
+  identifier?: string;
+}
+```
+
+**特性：**
+- 在 Worker 线程中执行（隔离耗时任务）
+- Worker 失败自动回退到直接执行
+- 支持超时控制（默认 2 分钟）
+
+#### 11. generate-tests-worker *(新增)*
+
+**功能：** Worker 版本的测试生成，在独立线程中执行。
+
+```typescript
+{
+  workspaceId: string;
+  matrix: TestMatrix;
+  scenarios?: string[];
+  maxTests?: number;
+}
+```
+
+**特性：**
+- 在 Worker 线程中执行（隔离耗时任务）
+- Worker 失败自动回退到直接执行
+- 支持超时控制（默认 5 分钟）
+- 支持并发生成多个场景
+
+#### 12. fix-failing-tests *(新增)*
+
+**功能：** 自动修复失败的测试用例（只修复测试代码，不修改源码）。
+
+```typescript
+{
+  workspaceId: string;
+  testResults: TestRunResult;  // 来自 run-tests 的结果
+  maxAttempts?: number;        // 最大修复尝试次数（默认 3）
+}
+```
+
+**输出：**
+- `success`: 修复是否成功
+- `fixes`: 应用的修复列表
+- `retriedResults`: 重新运行的测试结果
+- `attempts`: 实际尝试次数
+
+**特性：**
+- 智能分析失败原因（Mock 不正确、断言过严、异步处理等）
+- 生成修复建议并自动应用
+- 支持多轮修复（最多 3 次）
+- 置信度评估（只应用置信度 ≥ 0.5 的修复）
+
+#### 13. test-generation-workflow *(新增)*
+
+**功能：** 一键式完整测试生成工作流，整合所有步骤。
+
+```typescript
+{
+  repoUrl: string;
+  branch: string;
+  baselineBranch?: string;
+  scenarios?: string[];
+  autoFix?: boolean;        // 是否自动修复失败的测试（默认 false）
+  maxFixAttempts?: number;  // 最大修复尝试次数（默认 3）
+  maxTests?: number;
+  workDir?: string;
+}
+```
+
+**执行流程：**
+1. 获取 diff 和项目配置（`fetch-diff-from-repo`）
+2. 分析测试矩阵（`analyze-test-matrix-worker`）
+3. 生成测试用例（`generate-tests-worker`）
+4. 写入测试文件（`write-test-file`）
+5. 运行测试（`run-tests`）
+6. （可选）自动修复失败测试（`fix-failing-tests`）
+
+**输出：**
+- 完整的测试生成结果
+- 各步骤的执行时间和状态
+- 总耗时统计
+
+**使用场景：** n8n 中一键完成整个测试生成流程
+
+#### 14. generate-cursor-rule *(新增)*
+
+**功能：** 生成项目配置文件（.cursor/rule/fe-mcp.md）。
+
+```typescript
+{
+  workspaceId: string;
+  outputPath?: string;  // 默认 .cursor/rule/fe-mcp.md
+}
+```
+
+**输出：**
+- `filePath`: 生成的配置文件路径
+- `content`: 配置文件内容
+
+**特性：**
+- 基于项目配置自动生成推荐规则
+- 支持 Monorepo 子项目配置
+- 包含测试策略、代码规范等建议
+
 ---
 
 ## 架构
 
 ```
 src/
-├── agents/             # 测试生成 Agents
-│   └── tests/          # 不同测试场景（happy-path / edge-case 等）
-├── clients/            # 外部服务客户端
-│   ├── openai.ts       # OpenAI LLM 客户端
-│   └── embedding.ts    # Embedding 客户端
-├── tools/              # MCP 工具实现
-│   ├── analyze-test-matrix.ts
-│   ├── generate-tests.ts
+├── agents/                    # 测试生成 Agents
+│   ├── test-agent.ts          # 测试生成主 Agent
+│   ├── test-matrix-analyzer.ts # 测试矩阵分析器
+│   ├── test-fix-agent.ts      # 测试修复 Agent *(新)*
+│   ├── base.ts                # Agent 基类
+│   └── tests/                 # 不同测试场景（happy-path / edge-case 等）
+├── clients/                   # 外部服务客户端
+│   ├── openai.ts              # OpenAI LLM 客户端
+│   ├── embedding.ts           # Embedding 客户端
+│   └── git-client.ts          # Git 操作客户端 *(新)*
+├── orchestrator/              # 多项目管理 *(新模块)*
+│   ├── workspace-manager.ts   # 工作区管理器
+│   └── project-detector.ts    # 项目检测器
+├── workers/                   # Worker 线程池 *(新模块)*
+│   ├── worker-pool.ts         # Worker 池管理器
+│   ├── analysis-worker.ts     # 分析任务 Worker
+│   ├── generation-worker.ts   # 生成任务 Worker
+│   └── test-runner-worker.ts  # 测试执行 Worker
+├── tools/                     # MCP 工具实现
 │   ├── fetch-commit-changes.ts
+│   ├── fetch-diff-from-repo.ts *(新)*
+│   ├── detect-project-config.ts *(新)*
+│   ├── analyze-test-matrix.ts
+│   ├── analyze-test-matrix-worker.ts *(新)*
+│   ├── generate-tests.ts
+│   ├── generate-tests-worker.ts *(新)*
+│   ├── write-test-file.ts
+│   ├── run-tests.ts (已更新支持 Worker)
+│   ├── fix-failing-tests.ts *(新)*
+│   ├── test-generation-workflow.ts *(新)*
+│   ├── generate-cursor-rule.ts *(新)*
 │   ├── analyze-raw-diff-test-matrix.ts
 │   └── generate-tests-from-raw-diff.ts
-├── prompts/            # AI 提示词模板
-├── schemas/            # 数据结构定义
-├── utils/              # 工具函数
+├── prompts/                   # AI 提示词模板
+│   └── test-fix-agent.md      # 测试修复 Prompt *(新)*
+├── schemas/                   # 数据结构定义
+├── core/                      # 核心模块
+│   ├── app-context.ts         # 全局上下文（支持 Worker 和 Workspace）
+│   ├── base-tool.ts           # 工具基类
+│   └── tool-registry.ts       # 工具注册中心
+├── utils/                     # 工具函数
 │   ├── response-formatter.ts  # MCP 响应格式化（统一）
 │   └── ...
-├── cache/              # 缓存管理
-├── state/              # 状态管理
-└── config/             # 配置加载
+├── cache/                     # 缓存管理
+├── state/                     # 状态管理
+└── config/                    # 配置加载
 ```
 
 ### 代码优化亮点
