@@ -1,4 +1,4 @@
-# {{PROJECT_NAME}} · FE-MCP 工作规则（精简版）
+# {{PROJECT_NAME}} · FE-MCP prompt
 
 > 生成时间：{{GENERATED_AT}}
 

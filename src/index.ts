@@ -3,6 +3,7 @@
  * 基于 MCP 协议（FastMCP 实现）的前端代码审查和单元测试生成工具
  */
 
+import './utils/polyfills.js';
 import { FastMCP } from 'fastmcp';
 import dotenv from 'dotenv';
 
@@ -32,6 +33,7 @@ import { TestGenerationWorkflowTool } from './tools/test-generation-workflow.js'
 import { AnalyzeRawDiffTestMatrixTool } from './tools/analyze-raw-diff-test-matrix.js';
 import { GenerateTestsFromRawDiffTool } from './tools/generate-tests-from-raw-diff.js';
 import { GenerateCursorRuleTool } from './tools/generate-cursor-rule.js';
+import { GenerateGenTestRuleTool } from './tools/generate-gen-test-rule.js';
 import { getEnv, validateAiConfig } from './config/env.js';
 import { loadConfig } from './config/loader.js';
 import { logger } from './utils/logger.js';
@@ -158,6 +160,7 @@ function initialize() {
   toolRegistry.register(new FixFailingTestsTool());
   toolRegistry.register(new TestGenerationWorkflowTool());
   toolRegistry.register(new GenerateCursorRuleTool());
+  toolRegistry.register(new GenerateGenTestRuleTool());
   
   // 5. 原始 Diff 工具
   toolRegistry.register(new AnalyzeRawDiffTestMatrixTool(openai, state));
