@@ -8,7 +8,7 @@
 - Worker 执行：分析/生成/测试均可在 worker 线程中运行，支持超时、回退到主线程、崩溃自恢复。
 - 测试生成与修复：自动分析改动、生成测试矩阵和用例，运行并尝试自动修复失败的测试。
 - 流程编排：提供从获取 diff → 分析 → 生成测试 → 运行 → 自动修复的一键式工作流，适合 n8n 集成。
-- Cursor 规则生成：基于模板生成 `.cursor/rule/fe-mcp.md`，便于前端代码协作。
+- Gen-Test 规则生成：基于模板生成 `.cursor/rule/gen-test-mcp.md`，便于前端代码协作。
 
 ## 主要工具（MCP 可调用）
 - `fetch-diff-from-repo`: 克隆仓库并返回 diff + `workspaceId`。
@@ -18,7 +18,7 @@
 - `run-tests`: 运行 Vitest/Jest，非 watch/coverage 模式优先用 worker，失败回退。
 - `fix-failing-tests`: 调用 TestFixAgent 修复失败测试，可多轮尝试（最多 3 次，置信度阈值 ≥ 0.5）。
 - `test-generation-workflow`: 一键式完整流程：获取 diff → 分析 → 生成 → 运行 → 自动修复（含耗时记录与错误处理）。
-- `generate-cursor-rule`: 读取项目配置，基于模板生成或更新 `.cursor/rule/fe-mcp.md`。
+- `generate-gen-test-rule`: 读取项目配置，基于模板生成或更新 `.cursor/rule/gen-test-mcp.md`。
 
 ## 典型流程
 1) `fetch-diff-from-repo` 获取 `workspaceId` + diff  

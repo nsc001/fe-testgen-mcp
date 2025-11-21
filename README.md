@@ -15,7 +15,7 @@ npm run build
 npm start                       # 自动选择 HTTP Streaming 或 stdio 模式
 OPENAI_API_KEY=sk-xxx npm start -- --transport stdio
 ```
-- 需要 Node.js 18+（推荐 20+）。
+- 需要 Node.js 20+。
 - 默认端点：HTTP `http://localhost:3000/mcp`，SSE `http://localhost:3000/sse`。
 
 ## 配置速览

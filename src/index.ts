@@ -31,7 +31,6 @@ import { FixFailingTestsTool } from './tools/fix-failing-tests.js';
 import { TestGenerationWorkflowTool } from './tools/test-generation-workflow.js';
 import { AnalyzeRawDiffTestMatrixTool } from './tools/analyze-raw-diff-test-matrix.js';
 import { GenerateTestsFromRawDiffTool } from './tools/generate-tests-from-raw-diff.js';
-import { GenerateCursorRuleTool } from './tools/generate-cursor-rule.js';
 import { GenerateGenTestRuleTool } from './tools/generate-gen-test-rule.js';
 import { getEnv, validateAiConfig } from './config/env.js';
 import { loadConfig } from './config/loader.js';
@@ -158,7 +157,6 @@ function initialize() {
   toolRegistry.register(new RunTestsTool());
   toolRegistry.register(new FixFailingTestsTool());
   toolRegistry.register(new TestGenerationWorkflowTool());
-  toolRegistry.register(new GenerateCursorRuleTool());
   toolRegistry.register(new GenerateGenTestRuleTool());
   
   // 5. 原始 Diff 工具
